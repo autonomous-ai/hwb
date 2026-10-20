@@ -1,0 +1,81 @@
+# CLAUDE.md
+
+hwb is an acceptance-test utility for **freshly provisioned NVIDIA GPU servers**. An operator copies it to a new rig and runs it to verify the GPU driver, inventory the hardware, benchmark CPU, RAM, disk, thermals and GPU, and load-test a real model via vLLM.
+
+## Target environment (the rig, not the dev machine)
+
+- Xeon (often dual-socket/NUMA) + 1–8 NVIDIA GPUs: RTX A6000 (Ampere, sm_86), RTX 5090 (Blackwell, sm_120), others.
+- Ubuntu 22.04/24.04, Debian 12/13, Omarchy (Arch-based: `ID=arch` or `omarchy`, `pacman`).
+- The rig may be bare: no driver, no pip, no internet beyond the distro mirrors. Assume only `python3 >= 3.10` and coreutils.
+- Development happens on macOS, so code must import and unit-test there. Linux-only probes must degrade to SKIP or return empty data. They must never crash.
+
+## Architecture
+
+```
+hwb.sh                 launcher: finds python3>=3.10 (or uv), runs src/ without installing
+src/hwb/
+  cli.py               argparse subcommands, top-level exception/signal handling, exit codes
+  core/proc.py         THE ONLY place that spawns processes (argv list, timeout, audit log)
+  core/log.py          JSONL file log + human stderr log; use extra=fields(k=v)
+  core/result.py       Status (PASS/WARN/FAIL/SKIP/ERROR) + CheckResult(name, status, summary, data, hint)
+  core/context.py      RunContext: run dir, results, report sections; ctx.check() isolates crashes
+  core/report.py       report.json (schema-versioned) + report.md + console table
+  core/platform.py     os-release parsing, distro family (debian/arch), is_root
+  nvsmi.py             nvidia-smi CSV query wrapper (no pynvml)
+  detect/gpu.py        gather() -> GpuFacts snapshot; checks are pure fns of GpuFacts
+  metrics/collect.py   inventory collectors (sysfs/procfs first, CLI tools second)
+  install/plan.py      per-distro install plans as data (Step lists); execute() only with --apply
+  bench/               benchmarks (cpu, memory, disk, thermal, gpu): interfaces only so far
+  serve/               vLLM smoke and load test: interface only so far
+```
+
+## Hard rules
+
+1. **Stdlib-only core.** `dependencies = []` in pyproject stays empty, so the core can be bundled as one `.pyz` (`make bundle`). torch, vllm and other heavy deps go in **isolated uv venvs** created on demand under `$HWB_HOME` (default `~/.cache/hwb/venvs/<name>`). They never go in the core environment. GPU payload scripts run in those venvs as subprocesses and send results back as JSON on stdout.
+2. **Python 3.10 compatible.** Don't use `StrEnum`, `tomllib`, `typing.Self`, `except*` or `-P`. Use `from __future__ import annotations`.
+3. **All subprocesses go through `core.proc.run`**: argv lists, never `shell=True`, always a timeout. A non-zero exit is data and is not raised. A missing binary raises `ToolMissingError`.
+4. **Never modify the system implicitly.** Mutating actions (installs, sysctl, `nvidia-smi -pm 1`, writes outside the run dir or `--path`) must be: shown as a plan, run only with `--apply`, require root, and get a confirmation prompt (or `--yes`). Never auto-`sudo`. Disk benchmarks write to files only. They never touch raw block devices unless the user passes the device explicitly.
+5. **Every check reports a `CheckResult`.** Use FAIL only when the rig is not acceptable. Use WARN when it needs attention, SKIP when the check doesn't apply or a prerequisite is missing, and ERROR only when hwb itself broke. FAIL and WARN results get a `hint` the operator can act on.
+6. **Isolate failures.** Wrap each check or collector in `ctx.check(...)`, so one crash yields an ERROR result and the rest of the suite still runs. Catch `Exception` only at these isolation boundaries, always log with `exc_info`, and add a comment giving the reason.
+7. **Gather, then judge.** Probes read the machine into a facts dataclass. Checks are pure functions over the facts, which makes them unit-testable on macOS with synthetic inputs.
+8. **Long-running children** (vLLM server, burn tests) run in their own process group and are torn down in `finally`. SIGTERM is routed to `KeyboardInterrupt` in `cli.main`, so cleanup and the report still happen.
+9. **Privacy:** don't collect serial numbers, MACs or IPs into reports. Reports may be shared with vendors.
+10. Package names, driver branches and NVIDIA repo URLs drift. Keep them as named constants at the top of `install/plan.py`, not inline.
+
+## CI / release
+
+- `.github/workflows/ci.yml` runs lint, mypy, pytest on Python 3.10–3.13, `make dist`, then smoke-tests `hwb.pyz` on stock `ubuntu:22.04`, `ubuntu:24.04`, `debian:12` and `archlinux` containers. If you add a dependency outside the stdlib or a 3.11+ API, CI fails there.
+- `.github/workflows/release.yml` runs on a `v*` tag: it builds the pyz, wheel, sdist and SHA256SUMS, attests provenance, and creates the GitHub Release.
+- The version lives in **two places**, `pyproject.toml` and `src/hwb/__init__.py`. Bump both. `tests/test_version.py` and the release job enforce that they match.
+
+## Domain notes
+
+- Blackwell (RTX 50xx, compute_cap ≥ 10) needs the **open** kernel modules and driver ≥ 570 (R580+ recommended). It also needs CUDA ≥ 12.8 and PyTorch/vLLM wheels built for cu128 or newer. Ampere (A6000) works with either module flavor.
+- The CUDA toolkit (`nvcc`) is optional. torch and vllm pip wheels bundle the CUDA runtime and only need the driver (`libcuda.so.1`).
+- Ubuntu uses its own signed `nvidia-driver-<branch>-server-open` packages, which work with Secure Boot. Debian uses NVIDIA's CUDA repo (`cuda-keyring` + `nvidia-open`). Arch and Omarchy use `nvidia-open-dkms` + `nvidia-utils`, and the headers package must match the kernel flavor (`linux-lts-headers`, etc.).
+- Signals of a bad rig: nouveau loaded, a GPU on PCI but missing from nvidia-smi (Xid 79, "fallen off the bus"), PCIe width below max (bad riser or bifurcation), Xid events, thermal or power throttling under load. PCIe *gen* drops at idle, which is normal. Only width degradation is a WARN.
+- A6000 supports ECC and has a blower cooler. RTX 5090 draws up to 575 W, so check power limits and throttle reasons under the thermal burn.
+
+## Commands
+
+```bash
+uv run --python 3.10 pytest -q   # tests (also verifies 3.10 compatibility)
+make check                       # ruff + mypy --strict + pytest
+make bundle                      # dist/hwb.pyz, single file, stdlib-only
+./hwb.sh detect -v               # run from source on a rig
+```
+
+Output goes to `hwb-runs/<UTC-timestamp>-<host>-<command>/{report.json,report.md,hwb.log.jsonl}`. If you change the shape of `report.json`, bump `REPORT_SCHEMA` in `core/report.py`.
+
+## Roadmap / status
+
+- [x] core: logging, audit, result model, report, CLI, launcher, bundle
+- [x] `detect`: PCI scan, nouveau, kernel module, binding, Secure Boot, headers, nvidia-smi, Blackwell, PCIe width, persistence, libcuda, nvcc, Xid
+- [x] `info`: system, board, CPU, memory/DIMMs, NUMA, disks, NICs, hwmon temps, GPUs
+- [x] `install driver|cuda|tools`: dry-run plans + guarded apply
+- [ ] `metrics/sampler.py`: background time series (nvidia-smi `-lms` + hwmon) to CSV for bench and serve
+- [ ] `bench cpu|memory|disk` via stress-ng / sysbench / fio (SKIP with an `hwb install tools` hint if missing)
+- [ ] `bench thermal`: sustained CPU and GPU load with throttle-reason and Xid monitoring
+- [ ] `bench gpu`: torch payload in a uv venv: GEMM TFLOPS per dtype, memory bandwidth, H2D/D2H, P2P, NCCL all-reduce
+- [ ] `serve`: uv venv with vllm, `vllm serve` with TP across GPUs, health wait, `vllm bench serve`, guaranteed teardown
+- [ ] offline bundle: `.pyz` + uv binary + wheelhouse for air-gapped rigs

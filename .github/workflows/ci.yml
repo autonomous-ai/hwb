@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call: # reused by release.yml as a gate
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  UV_LOCKED: "1" # fail if uv.lock is out of date instead of silently re-resolving
+
+jobs:
+  lint:
+    name: lint + typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+      - run: make lint
+      - run: make typecheck
+
+  test:
+    name: test (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+      - run: uv run --python ${{ matrix.python }} pytest -q
+
+  bundle:
+    name: build bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+      - run: make dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
+  # Prove the bundle runs on the stock system Python of each supported distro, with no extra packages.
+  smoke:
+    name: smoke (${{ matrix.image }})
+    needs: bundle
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: ubuntu:22.04 # python 3.10, the oldest supported
+            setup: apt-get update -qq && apt-get install -y -qq python3 >/dev/null
+          - image: ubuntu:24.04
+            setup: apt-get update -qq && apt-get install -y -qq python3 >/dev/null
+          - image: debian:12
+            setup: apt-get update -qq && apt-get install -y -qq python3 >/dev/null
+          - image: archlinux:latest # stands in for Omarchy
+            setup: pacman -Sy --noconfirm --needed python >/dev/null
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Install system python3 only
+        run: ${{ matrix.setup }}
+      - name: Run bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 --version
+          python3 dist/hwb.pyz --version
+          python3 dist/hwb.pyz --out runs info
+          python3 dist/hwb.pyz --out runs install driver   # dry run: must plan without root/changes
+          # No GPU in CI: detect must report FAIL (exit 1), never crash (exit 2).
+          set +e; python3 dist/hwb.pyz --out runs detect; rc=$?; set -e
+          test "$rc" -eq 1 || { echo "detect exited $rc, expected 1"; exit 1; }
+          if grep -h '"status": "error"' runs/*/report.json; then echo "ERROR results found"; exit 1; fi

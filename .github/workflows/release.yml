@@ -1,0 +1,62 @@
+name: Release
+
+# Cut a release:  bump version in pyproject.toml + src/hwb/__init__.py, merge, then
+#   git tag v0.2.0 && git push origin v0.2.0
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: ci
+    runs-on: ubuntu-latest
+    environment: release # optional: add required reviewers in repo settings
+    permissions:
+      contents: write # create the GitHub Release
+      id-token: write # sign build provenance
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check tag matches package version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(make -s version)"
+          init="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' src/hwb/__init__.py)"
+          echo "tag=$tag pyproject=$pkg __init__=$init"
+          [ "$tag" = "$pkg" ] && [ "$tag" = "$init" ] || { echo "::error::tag/version mismatch"; exit 1; }
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Build
+        run: make dist
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/hwb.pyz
+            dist/*.whl
+            dist/*.tar.gz
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          prerelease=""
+          case "$TAG" in *-*) prerelease="--prerelease";; esac   # v1.0.0-rc1 etc.
+          gh release create "$TAG" dist/hwb.pyz dist/*.whl dist/*.tar.gz dist/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes --title "hwb $TAG" $prerelease

@@ -156,7 +156,7 @@ hwb serve --endpoint http://host:8000 [--model NAME] [--preset NAME]
           [--concurrency 1,4,16] [--requests 4] [--max-tokens 256] [--ready-timeout 3600]
 ```
 
-Hosts a real model with vLLM, or tests one that's already running, and measures it:
+Hosts a real model with vLLM, or tests one that's already running, and measures it. **Step-by-step guide: [Serving and testing a model](serve.md).**
 
 1. **Answer checks**, run with reasoning off and temperature 0. They catch a server that's up but wrong: bad quantization, the wrong chat template, a missing tool-call or reasoning parser.
    - arithmetic (`17 × 23`);
@@ -173,7 +173,7 @@ Hosts a real model with vLLM, or tests one that's already running, and measures 
 3. **Sampling throughout:** the sampler records GPU temperature, power, clocks and PCIe links for both phases. The Benchmarks tab shows the checks, a table per concurrency level and the charts.
 
 **What it launches:**
-- `--endpoint URL` tests that server and starts nothing.
+- `--endpoint URL` tests that server and starts nothing. The model name it reports selects the matching preset's settings, such as how to switch reasoning off and whether a tool-call parser is expected. With no matching preset, both common switches are sent (`enable_thinking` and `thinking` set to false).
 - Otherwise hwb first looks for a model server already running on the GPUs (see `info`). If it finds one and no `--preset` was given, **it tests that one rather than launching another**.
 - To launch, it picks the preset for the detected hardware, or the one named with `--preset`. It starts `vllm serve` in its own process group on `127.0.0.1`, waits for `/health` (`--ready-timeout`), tests it, and **always stops it** afterwards.
 - If other processes hold some GPUs, it launches on the free ones (`CUDA_VISIBLE_DEVICES`, numbered as in `nvidia-smi`). It refuses only when too few GPUs are free.

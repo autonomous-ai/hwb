@@ -25,8 +25,9 @@ interface Timeseries {
   csv?: string[];
 }
 
-const ORDER = ["monitor", "cpu", "thermal", "memory", "disk", "gpu"];
+const ORDER = ["serve", "monitor", "cpu", "thermal", "memory", "disk", "gpu"];
 const TITLES: Record<string, string> = {
+  serve: "Model serving",
   monitor: "Monitor",
   cpu: "CPU",
   thermal: "Thermal",
@@ -137,6 +138,89 @@ function PcieTable({ pcie }: { pcie: unknown }) {
   );
 }
 
+function ServeTables({ b }: { b: Row }) {
+  const checks = Array.isArray(b.checks) ? (b.checks as Row[]) : [];
+  const levels = Array.isArray(b.load) ? (b.load as Row[]) : [];
+  const ms = (v: unknown) => fmt(v, 0, " ms") ?? <Dash />;
+  return (
+    <>
+      {checks.length > 0 && (
+        <div className="table-wrap">
+          <table className="serve-checks">
+            <caption>Answer checks (reasoning off, temperature 0)</caption>
+            <thead>
+              <tr>
+                <th>Check</th>
+                <th>Result</th>
+                <th>Answer</th>
+                <th className="num">TTFT</th>
+              </tr>
+            </thead>
+            <tbody>
+              {checks.map((c) => (
+                <tr key={String(c.name)}>
+                  <td>{String(c.name).replace("_", " ")}</td>
+                  <td>
+                    <span className={`pill ${String(c.status)}`}>{String(c.status)}</span>
+                    {c.detail ? <span className="finding-hint"> {String(c.detail)}</span> : null}
+                  </td>
+                  <td>
+                    <code className="answer">{String(c.answer ?? "")}</code>
+                  </td>
+                  <td className="num">{ms(num(c.ttft_s) === null ? null : num(c.ttft_s)! * 1000)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {levels.length > 0 && (
+        <div className="table-wrap">
+          <table className="serve-load">
+            <caption>Load test ({String(levels[0]?.requests ?? "")}+ requests per level, fixed output length)</caption>
+            <thead>
+              <tr>
+                <th className="num">Concurrent</th>
+                <th className="num">OK / errors</th>
+                <th className="num">Output tok/s</th>
+                <th className="num">Per request tok/s</th>
+                <th className="num">TTFT p50 / p99</th>
+                <th className="num">TPOT p50</th>
+                <th className="num">Longest stall</th>
+              </tr>
+            </thead>
+            <tbody>
+              {levels.map((lv) => (
+                <tr key={String(lv.concurrency)}>
+                  <td className="num">{String(lv.concurrency)}</td>
+                  <td className={`num${num(lv.errors) ? " bad" : ""}`}>
+                    {String(lv.ok)} / {String(lv.errors)}
+                  </td>
+                  <td className="num">
+                    <strong>{fmt(lv.output_tok_per_s, 0) ?? <Dash />}</strong>
+                  </td>
+                  <td className="num">{fmt(lv.per_request_tok_per_s, 0) ?? <Dash />}</td>
+                  <td className="num">
+                    {ms(lv.ttft_ms_p50)} / {ms(lv.ttft_ms_p99)}
+                  </td>
+                  <td className="num">{ms(lv.tpot_ms_p50)}</td>
+                  <td className="num">{ms(lv.max_stall_ms)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {Array.isArray(b.command) && (
+        <details className="data">
+          <summary>vLLM command</summary>
+          <pre className="cmd">{(b.command as string[]).join(" ")}</pre>
+        </details>
+      )}
+    </>
+  );
+}
+
 function headline(kind: string, b: Row): ReactNode {
   if (kind === "cpu") {
     const method = b.method === "stress-ng" ? "stress-ng matrixprod" : "Python fallback (install stress-ng)";
@@ -150,6 +234,27 @@ function headline(kind: string, b: Row): ReactNode {
           ["Peak CPU temp", fmt(b.cpu_temp_peak_c, 0, " °C")],
           ["Package power", fmt(b.load_power_w, 0, " W"), "average under load"],
           ["Load generator", method],
+        ]}
+      />
+    );
+  }
+  if (kind === "serve") {
+    const levels = Array.isArray(b.load) ? (b.load as Row[]) : [];
+    const checks = Array.isArray(b.checks) ? (b.checks as Row[]) : [];
+    const best = levels.reduce<Row | null>((a, lv) => (num(lv.output_tok_per_s) ?? 0) > (num(a?.output_tok_per_s) ?? -1) ? lv : a, null);
+    const single = levels.find((lv) => lv.concurrency === 1);
+    const preset = (b.preset ?? null) as Row | null;
+    const passed = checks.filter((c) => c.status === "pass").length;
+    const counted = checks.filter((c) => c.status !== "skip").length;
+    return (
+      <Tiles
+        items={[
+          ["Model", String(b.model ?? preset?.model ?? "?"), preset ? `preset ${String(preset.name)} (${String(preset.status)})` : String(b.endpoint ?? "")],
+          ["Best throughput", fmt(best?.output_tok_per_s, 0, " tok/s"), best ? `at ${String(best.concurrency)} concurrent` : undefined],
+          ["TTFT, 1 request", fmt(single?.ttft_ms_p50, 0, " ms"), "p50"],
+          ["Speed, 1 request", fmt(single?.per_request_tok_per_s, 0, " tok/s"), "per request"],
+          ["Answer checks", counted ? `${passed} / ${counted}` : null],
+          ["Load time", fmt(b.ready_s, 0, " s"), "until /health"],
         ]}
       />
     );
@@ -287,7 +392,7 @@ export function Charts({ ts }: { ts: Timeseries }) {
 function BenchCard({ kind, b, runId }: { kind: string; b: Row; runId: string }) {
   const ts = b.timeseries as Timeseries | undefined;
   const { timeseries: _ts, phases, findings, pcie, ...rest } = b;
-  const known = kind === "cpu" || kind === "thermal" || kind === "monitor";
+  const known = ["cpu", "thermal", "monitor", "serve"].includes(kind);
   const gpusWatched = ts?.series?.some((s) => s.key.startsWith("gpu"));
   return (
     <section className="bench" aria-label={`${TITLES[kind] ?? kind} benchmark`}>
@@ -319,6 +424,7 @@ function BenchCard({ kind, b, runId }: { kind: string; b: Row; runId: string }) 
           Full resolution: {(ts.csv ?? []).join(", ") || "CSV files"} in the run directory.
         </p>
       )}
+      {kind === "serve" && <ServeTables b={b} />}
       <PcieTable pcie={pcie} />
       <PhaseTable phases={phases} />
     </section>

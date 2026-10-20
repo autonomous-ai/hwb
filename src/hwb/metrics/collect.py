@@ -18,6 +18,7 @@ from ..core.context import RunContext
 from ..core.errors import HwbError
 from ..core.platform import is_root, os_info
 from ..core.result import CheckResult, Status
+from . import workloads
 
 Inventory = dict[str, Any]
 
@@ -213,6 +214,7 @@ COLLECTORS: dict[str, Callable[[], Inventory]] = {
     "network": network,
     "sensors": sensors,
     "gpus": gpus,
+    "workloads": workloads.gather,
 }
 
 
@@ -240,6 +242,8 @@ def _summarize(name: str, data: Inventory) -> str:
         return ", ".join(r.get("name") or "?" for r in rows) if rows else "no nvidia-smi"
     if name == "disks":
         return f"{len(data['devices'])} disk(s)"
+    if name == "workloads":
+        return workloads.summarize(data)
     if name == "system":
         return f"{data['os']} / {data['kernel']}"
     return "collected"

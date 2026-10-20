@@ -370,3 +370,75 @@ describe("PCIe link monitoring", () => {
     expect(within(panel).getByText(/added no load/)).toBeTruthy();
   });
 });
+
+describe("model serving", () => {
+  const serveReport: Report = {
+    ...HEALTHY,
+    command: "serve",
+    results: [
+      { name: "serve.vllm", status: "pass", summary: "ready", hint: null, data: {} },
+      { name: "serve.checks", status: "fail", summary: "1 of 5 failed", hint: "parser", data: {} },
+      { name: "serve.load", status: "pass", summary: "2100 tok/s", hint: null, data: {} },
+    ],
+    sections: {
+      bench: {
+        serve: {
+          mode: "launch",
+          model: "deepseek-v4-flash-vision",
+          ready_s: 412,
+          preset: { name: "deepseek-v4-flash-vision", status: "verified", model: "deepseek-ai/DeepSeek-V4-Flash-Vision-Exp" },
+          command: ["vllm", "serve", "deepseek-ai/DeepSeek-V4-Flash-Vision-Exp", "--tensor-parallel-size", "2"],
+          checks: [
+            { name: "arithmetic", status: "pass", answer: "391", ttft_s: 0.21 },
+            { name: "tool_call", status: "fail", detail: "no tool call (check --tool-call-parser)", answer: "It is sunny.", ttft_s: 0.3 },
+          ],
+          load: [
+            { concurrency: 1, requests: 4, ok: 4, errors: 0, output_tok_per_s: 180.4, per_request_tok_per_s: 182, ttft_ms_p50: 210, ttft_ms_p99: 260, tpot_ms_p50: 5.5, max_stall_ms: 40 },
+            { concurrency: 16, requests: 64, ok: 64, errors: 0, output_tok_per_s: 2100.2, per_request_tok_per_s: 140, ttft_ms_p50: 900, ttft_ms_p99: 1800, tpot_ms_p50: 7.1, max_stall_ms: 120 },
+          ],
+        },
+      },
+    },
+  };
+
+  it("shows the model, best throughput, checks and the load table", async () => {
+    const user = userEvent.setup();
+    render(<App bundle={normalize(serveReport)} />);
+    await user.click(tab("Report sections", "Benchmarks"));
+    const panel = activePanel();
+    expect(within(panel).getByRole("heading", { name: "Model serving" })).toBeTruthy();
+    expect(within(panel).getByText("2,100 tok/s")).toBeTruthy();
+    expect(within(panel).getByText("1 / 2")).toBeTruthy(); // checks passed / counted
+    expect(within(panel).getByText(/no tool call/)).toBeTruthy();
+    const rows = panel.querySelectorAll("table.serve-load tbody tr");
+    expect(rows).toHaveLength(2);
+    expect(rows[1]!.textContent).toContain("2,100");
+    expect(within(panel).getByText(/vllm serve deepseek-ai/)).toBeTruthy();
+  });
+});
+
+describe("models on the GPUs", () => {
+  it("lists running model servers in the inventory", async () => {
+    const user = userEvent.setup();
+    const inv = (HEALTHY.sections.inventory ?? {}) as Row;
+    const report: Report = {
+      ...HEALTHY,
+      sections: {
+        ...HEALTHY.sections,
+        inventory: {
+          ...inv,
+          workloads: {
+            servers: [{ framework: "vllm", model: "deepseek-ai/DeepSeek-V4-Flash-Vision-Exp", served_name: "dsv4", port: 8000, gpus: ["0", "1"], used_gib: 180, processes: 2, serving: { ids: ["dsv4"] } }],
+            processes: [{ gpu: "0", pid: 1240, process: "python3.12", used_mib: 92160 }],
+          },
+        },
+      },
+    };
+    render(<App bundle={normalize(report)} />);
+    await user.click(tab("Report sections", "Inventory"));
+    const card = Array.from(activePanel().querySelectorAll("section.card")).find((c) => c.querySelector("h3")?.textContent === "Models on the GPUs")!;
+    expect(card.textContent).toContain("deepseek-ai/DeepSeek-V4-Flash-Vision-Exp");
+    expect(card.textContent).toContain("0, 1");
+    expect(card.textContent).toContain("vllm :8000 → dsv4");
+  });
+});

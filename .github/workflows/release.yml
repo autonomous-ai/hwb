@@ -26,7 +26,7 @@ jobs:
       id-token: write # sign build provenance
       attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -38,13 +38,13 @@ jobs:
           echo "tag=$tag pyproject=$pkg __init__=$init"
           [ "$tag" = "$pkg" ] && [ "$tag" = "$init" ] || { echo "::error::tag/version mismatch"; exit 1; }
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
 
       - name: Build
         run: make dist
 
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             dist/hwb.pyz

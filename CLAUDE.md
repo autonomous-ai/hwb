@@ -4,7 +4,7 @@ hwb is an acceptance-test utility for **freshly provisioned NVIDIA GPU servers**
 
 ## Target environment (the rig, not the dev machine)
 
-- Xeon (often dual-socket/NUMA) + 1–8 NVIDIA GPUs: RTX A6000 (Ampere, sm_86), RTX 5090 (Blackwell, sm_120), others.
+- Xeon or EPYC/Threadripper (often dual-socket/NUMA) + 1–8 NVIDIA GPUs: RTX A6000 (Ampere, sm_86), RTX PRO 6000 Blackwell (sm_120), RTX 4090 (Ada, sm_89), RTX 5090 (Blackwell, sm_120), others.
 - Ubuntu 22.04/24.04, Debian 12/13, Omarchy (Arch-based: `ID=arch` or `omarchy`, `pacman`).
 - The rig may be bare: no driver, no pip, no internet beyond the distro mirrors. Assume only `python3 >= 3.10` and coreutils.
 - Development happens on macOS, so code must import and unit-test there. Linux-only probes must degrade to SKIP or return empty data. They must never crash.
@@ -58,11 +58,12 @@ gateway/               Cloudflare Worker (JS): R2 report store, D1 analysis tabl
 
 ## Domain notes
 
-- Blackwell (RTX 50xx, compute_cap ≥ 10) needs the **open** kernel modules and driver ≥ 570 (R580+ recommended). It also needs CUDA ≥ 12.8 and PyTorch/vLLM wheels built for cu128 or newer. Ampere (A6000) works with either module flavor.
+- Blackwell (RTX 50xx, RTX PRO 6000 Blackwell; compute_cap ≥ 10) needs the **open** kernel modules and driver ≥ 570 (R580+ recommended). It also needs CUDA ≥ 12.8 and PyTorch/vLLM wheels built for cu128 or newer. Ampere (A6000) works with either module flavor.
 - The CUDA toolkit (`nvcc`) is optional. torch and vllm pip wheels bundle the CUDA runtime and only need the driver (`libcuda.so.1`).
 - Ubuntu uses its own signed `nvidia-driver-<branch>-server-open` packages, which work with Secure Boot. Debian uses NVIDIA's CUDA repo (`cuda-keyring` + `nvidia-open`). Arch and Omarchy use `nvidia-open-dkms` + `nvidia-utils`, and the headers package must match the kernel flavor (`linux-lts-headers`, etc.).
 - Signals of a bad rig: nouveau loaded, a GPU on PCI but missing from nvidia-smi (Xid 79, "fallen off the bus"), PCIe width below max (bad riser or bifurcation), Xid events, thermal or power throttling under load. PCIe *gen* drops at idle, which is normal. Only width degradation is a WARN.
 - A6000 supports ECC and has a blower cooler. RTX 5090 draws up to 575 W, so check power limits and throttle reasons under the thermal burn.
+- **"A6000" is ambiguous.** RTX A6000 = Ampere, 48 GB, PCIe Gen4, 300 W. RTX PRO 6000 Blackwell = sm_120, 96 GB, PCIe **Gen5**, 600 W Workstation Edition (flow-through cooler: stacked cards breathe each other's exhaust), 300 W Max-Q (blower), passive Server Edition. Customers say "2x A6000" for either; trust `nvidia-smi` name and compute_cap. Expected link, VRAM budget and model choice all differ (e.g. DeepSeek-V4-Flash FP8, 168 GB, runs on 2x PRO 6000 with vLLM's b12x SM120 kernels, not on 2x RTX A6000).
 
 ## Commands
 

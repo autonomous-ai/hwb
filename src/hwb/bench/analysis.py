@@ -175,7 +175,7 @@ def thermal_findings(
 PCIE_HINT = (
     "the link retrained to a lower speed or is taking errors: reseat the card and clean the "
     "contacts, replace risers, check slot airflow (it often starts once the chassis is warm), "
-    "update the BIOS; forcing Gen3 in the BIOS is the stable fallback"
+    "update the BIOS; forcing the slot one generation lower in the BIOS is the stable fallback"
 )
 
 

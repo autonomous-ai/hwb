@@ -29,7 +29,7 @@ NVIDIA_VENDOR = "0x10de"
 # Drivers that hand a GPU to a VM (PCI passthrough). Such GPUs are accepted: the host's
 # nvidia driver doesn't own them, and their driver stack lives inside the guest.
 PASSTHROUGH_DRIVERS = frozenset({"vfio-pci", "pci-stub"})
-# Blackwell (sm_100/sm_120, e.g. RTX 5090) requires the open kernel modules and >= R570.
+# Blackwell (sm_100/sm_120, e.g. RTX 5090, RTX PRO 6000 Blackwell) requires the open kernel modules and >= R570.
 MIN_BLACKWELL_DRIVER = (570,)
 _DRIVER_RE = re.compile(r"Kernel Module(?: for \S+)?\s+(\d+\.\d+(?:\.\d+)?)")
 _NVCC_RE = re.compile(r"release (\d+\.\d+)")

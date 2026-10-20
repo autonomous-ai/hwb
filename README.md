@@ -82,5 +82,6 @@ Interactive runs offer to submit at the end; `HWB_GATEWAY=off` turns that off.
 | `monitor` | ✅ the same time series and judgements as the benchmarks, recorded while the machine runs its own workload; includes GPU PCIe links (generation while busy, width, error counters, replays) |
 | `bench memory\|disk\|gpu` | 🚧 reports SKIP "not implemented yet" |
 | `serve` | ✅ vLLM presets per hardware (2× RTX PRO 6000 Blackwell: DeepSeek V4 Flash, Qwen 3.5/3.6/3.8, GLM 4.5 Air/4.7 Flash), or `--endpoint` for a running server; answer checks + load test (tokens/s, time to first token, time per token) with GPU sampling |
+| `serve`: model weights | ✅ finds weights already on the machine (HF caches incl. other users', ModelScope, model dirs; Ollama/LM Studio as GGUF), prefers presets already on disk, `--model` runs any of them; downloads go to the shared HF cache after a disk check |
 | `info`: models on the GPUs | ✅ running model servers (vLLM, SGLang, llama.cpp, Ollama, TGI, Triton) with model, port, GPUs and memory; `serve` tests them instead of launching another |
 | `submit` | ✅ sanitized upload to the public gateway, link and QR code, delete token |

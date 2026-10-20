@@ -51,9 +51,16 @@ class Preset:
     notes: str = ""
     default: bool = False
 
-    def command(self, *, host: str = "0.0.0.0", port: int = 8000, vllm: str = "vllm") -> list[str]:  # noqa: S104 - a server preset
-        argv = [vllm, "serve", self.model]
-        if self.revision:
+    def command(
+        self,
+        *,
+        host: str = "0.0.0.0",  # noqa: S104 - a server preset
+        port: int = 8000,
+        vllm: str = "vllm",
+        model: str | None = None,  # a local copy's path instead of the HF id
+    ) -> list[str]:
+        argv = [vllm, "serve", model or self.model]
+        if self.revision and model is None:
             argv += ["--revision", self.revision]
         return [
             *argv,

@@ -14,6 +14,35 @@ hwb serve --list  # presets; "fits = yes" marks the ones for this machine
 
 The inventory's **Models on the GPUs** section shows any model server already holding the GPUs (vLLM, SGLang, llama.cpp, Ollama, TGI, Triton), with its model, port, GPUs and memory.
 
+## Model weights: reuse what's on disk, share what's downloaded
+
+hwb has **no model store of its own**. It finds weights where the common tools keep them, and downloads into the cache those tools share, so each model is downloaded once per machine.
+
+**Found automatically** (`hwb serve --list`, and "Model weights on disk" in `sudo hwb`):
+
+| where | used by | runnable with vLLM? |
+|---|---|---|
+| Hugging Face cache: `$HF_HUB_CACHE`, `$HF_HOME/hub`, `~/.cache/huggingface/hub`; **as root, every user's** | vLLM, SGLang, transformers, `hf download` | yes (safetensors) |
+| ModelScope `~/.cache/modelscope/hub` | ModelScope, vLLM | yes, loaded by path |
+| `$HWB_MODEL_DIRS` (colon-separated), `/models`, `/data/models`, `/opt/models` | your own copies | yes, if they hold safetensors + `config.json` |
+| Ollama `~/.ollama/models`, `/usr/share/ollama/.ollama/models` | Ollama | no (GGUF): test through Ollama with `--endpoint` |
+| LM Studio `~/.lmstudio/models`, llama.cpp `~/.cache/llama.cpp` | LM Studio, llama.cpp | no (GGUF): test through their server |
+
+- **Each model is listed with** its size, architecture (from `config.json`; it tells a text LLM from, say, a music model) and whether the download is **complete**: every shard in the safetensors index is present, with no dangling links from an interrupted download.
+- **Privacy:** reports never include the paths, which contain user names.
+
+**How `hwb serve` uses them:**
+- **No `--preset`:** for this hardware it prefers a preset whose weights are already complete on disk. The default comes first, then verified presets. If none is on disk, it uses the default, which downloads.
+- **Already on disk:** vLLM loads that copy, even from another user's cache or a ModelScope or plain directory (by path), and nothing is downloaded. If the tokenizer is there too, `HF_HUB_OFFLINE=1` is set, so vLLM doesn't contact the Hub or write lock files into someone else's cache.
+- **`hwb serve --model <HF id | directory>`** launches any model found on the machine without a preset. It uses as few GPUs as fit the weights in 85% of their memory, safe default flags, and no tool-call parser.
+- **New downloads** go to the standard Hugging Face cache, shared with every other tool. Move it to a bigger disk with `HF_HOME=/data/hf` (vLLM, transformers and `hf` all follow it). Before downloading, hwb checks for free space and refuses rather than fail partway through, e.g. after 150 GB of a 168 GB model (`--force` overrides).
+- **Run `hwb serve` without `sudo`.** It doesn't need root, and under `sudo` downloads would go to root's cache instead of yours. hwb warns when that happens.
+
+To download a model ahead of time, into the same shared cache:
+```bash
+hf download zai-org/GLM-4.5-Air-FP8      # pip install -U huggingface_hub
+```
+
 ## 1. A model is already running: test it
 
 ```bash

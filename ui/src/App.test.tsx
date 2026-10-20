@@ -442,3 +442,27 @@ describe("models on the GPUs", () => {
     expect(card.textContent).toContain("vllm :8000 → dsv4");
   });
 });
+
+describe("model weights on disk", () => {
+  it("lists cached models in the inventory", async () => {
+    const user = userEvent.setup();
+    const inv = (HEALTHY.sections.inventory ?? {}) as Row;
+    const report: Report = {
+      ...HEALTHY,
+      sections: {
+        ...HEALTHY.sections,
+        inventory: {
+          ...inv,
+          model_weights: {
+            models: [{ id: "Qwen/Qwen3.8-27B", source: "huggingface", size_gb: 55.6, architecture: "Qwen3_5ForConditionalGeneration", format: "safetensors", complete: true }],
+          },
+        },
+      },
+    };
+    render(<App bundle={normalize(report)} />);
+    await user.click(tab("Report sections", "Inventory"));
+    const card = Array.from(activePanel().querySelectorAll("section.card")).find((c) => c.querySelector("h3")?.textContent?.startsWith("Model weights on disk"))!;
+    expect(card.textContent).toContain("Qwen/Qwen3.8-27B");
+    expect(card.textContent).toContain("Qwen3_5ForConditionalGeneration");
+  });
+});

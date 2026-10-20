@@ -100,7 +100,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument(
         "--endpoint", metavar="URL", help="test this running OpenAI-compatible server instead"
     )
-    s.add_argument("--model", help="model name at --endpoint (default: the first one it serves)")
+    s.add_argument(
+        "--model",
+        help="with --endpoint: the served model name (default: the first one it serves); "
+        "otherwise: launch this model from the machine (HF id in a cache, or a directory) without a preset",
+    )
     s.add_argument(
         "--port", type=int, default=8000, help="port for the launched vLLM (default 8000)"
     )
@@ -226,15 +230,40 @@ def _cmd_serve(ctx: RunContext, args: argparse.Namespace) -> None:
 
 def _serve_list() -> int:
     hw = serve.presets.matching_hardware(serve.detected_gpus())
+    found = serve.weights.find_all()
     print(f"This machine: {hw.label if hw else 'no preset hardware profile matches'}\n")
-    print(f"{'preset':<28} {'fits':<5} {'status':<9} {'weights':>8}  {'quant':<26} model")
+    print(f"{'preset':<28} {'fits':<5} {'on disk':<8} {'status':<9} {'weights':>8}  model")
     for p in serve.presets.PRESETS:
         fits = "yes" if hw and p.hardware == hw.id else "-"
+        cached = "yes" if serve.weights.find(found, p.model, p.revision) else "-"
         star = " (default)" if p.default else ""
         print(
-            f"{p.name:<28} {fits:<5} {p.status:<9} {p.weights_gb:>6.0f}GB  {p.quant:<26} {p.model}{star}"
+            f"{p.name:<28} {fits:<5} {cached:<8} {p.status:<9} {p.weights_gb:>6.0f}GB  {p.model}{star}"
         )
-    print("\nhwb serve --preset NAME [--dry-run]   or   hwb serve --endpoint http://host:8000")
+    print(f"\nModel weights on this machine ({len(found)}):")
+    for w in found:
+        preset = serve.presets.match_model(w.id)
+        if not w.complete:
+            how = "incomplete download"
+        elif not w.vllm_runnable:
+            how = f"{w.format}: run it with {w.source}, test with --endpoint"
+        else:
+            how = (
+                f"preset {preset.name}"
+                if preset
+                else f"hwb serve --model {w.id if w.source == 'huggingface' else w.path}"
+            )
+        print(
+            f"  {w.id:<44} {w.source:<12} {w.size_gb:>6.1f} GB  {w.architecture or '?':<34} {how}"
+        )
+    if not found:
+        print(
+            "  none found (Hugging Face, ModelScope, Ollama, LM Studio caches; $HWB_MODEL_DIRS, /models)"
+        )
+    print(
+        f"\nNew downloads go to the shared Hugging Face cache: {serve.weights.default_hub()} (set HF_HOME to move it)"
+    )
+    print("hwb serve --preset NAME [--dry-run] | --model ID-OR-PATH | --endpoint http://host:8000")
     return 0
 
 

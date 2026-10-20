@@ -148,6 +148,15 @@ function Workloads({ data }: { data: Row }) {
   );
 }
 
+const WEIGHT_COLUMNS: Columns = [
+  ["id", "Model"],
+  ["source", "Where"],
+  ["size_gb", "Size (GB)"],
+  ["architecture", "Architecture"],
+  ["format", "Format"],
+  ["complete", "Complete"],
+];
+
 const DISK_COLUMNS: Columns = [
   ["name", "Device"],
   ["model", "Model"],
@@ -195,6 +204,11 @@ export function Inventory({ inv }: { inv: Row }) {
       {typeof inv.workloads === "object" && inv.workloads !== null && (
         <Card wide title="Models on the GPUs">
           <Workloads data={obj(inv.workloads)} />
+        </Card>
+      )}
+      {rows(obj(inv.model_weights).models).length > 0 && (
+        <Card wide title={`Model weights on disk (${rows(obj(inv.model_weights).models).length})`}>
+          <Table rows={rows(obj(inv.model_weights).models)} columns={WEIGHT_COLUMNS} />
         </Card>
       )}
       {dimms.length > 0 && (

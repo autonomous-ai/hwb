@@ -32,13 +32,19 @@ Optional tools make some results richer. hwb works without them and marks the af
 One command downloads the latest release, verifies it against the release's `SHA256SUMS`, and installs it as an executable `hwb`:
 
 ```bash
-curl -fsSL https://github.com/autonomous-ai/hwb/releases/latest/download/install.sh | sudo sh     # -> /usr/local/bin/hwb
-curl -fsSL https://github.com/autonomous-ai/hwb/releases/latest/download/install.sh | sh          # -> ~/.local/bin/hwb, no root
+curl -fsSL https://autonomous.ai/hwb-install.sh | sudo sh     # -> /usr/local/bin/hwb
+curl -fsSL https://autonomous.ai/hwb-install.sh | sh          # -> ~/.local/bin/hwb, no root
 
 sudo hwb        # driver checks + inventory
 ```
 
-The installer is a short POSIX `sh` script that ships with every release. Read it first if you like: `curl -fsSL …/install.sh | less`.
+`https://autonomous.ai/hwb-install.sh` is a redirect to the latest release's installer. Use the GitHub URL directly if you prefer, or if a proxy only allows github.com:
+
+```bash
+curl -fsSL https://github.com/autonomous-ai/hwb/releases/latest/download/install.sh | sudo sh
+```
+
+The installer is a short POSIX `sh` script that ships with every release. Read it first if you like: `curl -fsSL https://autonomous.ai/hwb-install.sh | less`.
 - **Prerequisites:** only `python3` ≥ 3.10. It downloads with `curl`, `wget`, or `python3` itself when neither is installed.
 - **Safe to re-run:** running it again re-installs or updates in place.
 - **Options**, set as environment variables (put them after `sudo` so they reach the script, e.g. `| sudo HWB_VERSION=v0.4.0 sh`):
@@ -49,7 +55,7 @@ The installer is a short POSIX `sh` script that ships with every release. Read i
 | `HWB_INSTALL_DIR` | `/usr/local/bin` as root, else `~/.local/bin` | where `hwb` goes |
 | `HWB_BASE_URL` | the GitHub release | a mirror or local directory (`file:///path`) holding `hwb.pyz` and `SHA256SUMS` |
 
-Prefer to do it by hand? `hwb` is just the release's `hwb.pyz` with the executable bit set:
+**Optional: download the release by hand.** `hwb` is just the release's `hwb.pyz` with the executable bit set:
 
 ```bash
 curl -fsSLO https://github.com/autonomous-ai/hwb/releases/latest/download/hwb.pyz

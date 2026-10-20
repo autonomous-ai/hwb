@@ -2,8 +2,10 @@
 # Install hwb from a GitHub release: downloads hwb.pyz + SHA256SUMS, verifies the checksum,
 # installs it as an executable `hwb`.
 #
-#   curl -fsSL https://github.com/autonomous-ai/hwb/releases/latest/download/install.sh | sudo sh
-#   curl -fsSL https://github.com/autonomous-ai/hwb/releases/latest/download/install.sh | sh   # -> ~/.local/bin
+#   curl -fsSL https://autonomous.ai/hwb-install.sh | sudo sh
+#   curl -fsSL https://autonomous.ai/hwb-install.sh | sh   # -> ~/.local/bin
+#
+# https://autonomous.ai/hwb-install.sh redirects to https://github.com/autonomous-ai/hwb/releases/latest/download/install.sh.
 #
 # Environment:
 #   HWB_VERSION      release tag to install, e.g. v0.4.0 (default: latest)

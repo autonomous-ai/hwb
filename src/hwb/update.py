@@ -31,7 +31,8 @@ log = logging.getLogger(__name__)
 
 REPO = "autonomous-ai/hwb"
 RELEASES_URL = f"https://github.com/{REPO}/releases"
-INSTALL_CMD = f"curl -fsSL {RELEASES_URL}/latest/download/install.sh | sudo sh"
+# Short link to the latest release's install.sh ({RELEASES_URL}/latest/download/install.sh).
+INSTALL_CMD = "curl -fsSL https://autonomous.ai/hwb-install.sh | sudo sh"
 ENV_RELEASES = "HWB_RELEASES_URL"  # mirror or test server instead of GitHub
 ENV_NO_CHECK = "HWB_NO_UPDATE_CHECK"
 ENV_HOME = "HWB_HOME"

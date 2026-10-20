@@ -15,7 +15,7 @@ The only thing hwb needs on the server is `python3` 3.10 or newer. Nothing is in
 
 ```bash
 # 1. Install the latest release as /usr/local/bin/hwb (checksum-verified; needs only python3 >= 3.10)
-curl -fsSL https://github.com/autonomous-ai/hwb/releases/latest/download/install.sh | sudo sh
+curl -fsSL https://autonomous.ai/hwb-install.sh | sudo sh
 
 # 2. Check the driver stack and collect the inventory (read-only; root adds DIMMs, Xid scan, CPU power)
 sudo hwb
@@ -34,7 +34,7 @@ sudo hwb bench thermal --duration 600
 hwb submit
 ```
 
-Or run steps 2 and 4 in one go: `sudo hwb all --duration 600`. Without sudo, the installer puts `hwb` in `~/.local/bin` instead.
+Or run steps 2 and 4 in one go: `sudo hwb all --duration 600`. Without sudo, the installer puts `hwb` in `~/.local/bin` instead. `https://autonomous.ai/hwb-install.sh` redirects to the latest release's `install.sh`; [installation](docs/install.md) has the direct GitHub link and a manual download.
 
 **Updates:** when a newer release is out, interactive runs say so (checked at most once a day; `HWB_NO_UPDATE_CHECK=1` turns it off). `sudo hwb update --apply` downloads it, verifies the checksum, test-runs it and replaces `hwb` in place.
 

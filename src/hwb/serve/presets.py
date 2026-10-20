@@ -365,6 +365,16 @@ def by_name(name: str) -> Preset | None:
     return next((p for p in PRESETS if p.name == name), None)
 
 
+def match_model(model_id: str) -> Preset | None:
+    """The preset a running server's model id belongs to: preset name, HF id, or the HF id's
+    last part (vLLM's default served name), case-insensitive."""
+    want = model_id.strip().lower()
+    for p in PRESETS:
+        if want in (p.name.lower(), p.model.lower(), p.model.rsplit("/", 1)[-1].lower()):
+            return p
+    return None
+
+
 @dataclass(frozen=True)
 class Gpu:
     name: str

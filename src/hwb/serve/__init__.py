@@ -147,7 +147,7 @@ def _test(
     sample: bool,
 ) -> None:
     api_key = os.environ.get(ENV_API_KEY)
-    no_thinking = preset.no_thinking if preset else {}
+    no_thinking = preset.no_thinking if preset else suite.NO_THINKING_ANY
     tools = preset.tools if preset else True
     with Sampler(ctx.run_dir, name="serve", interval=opts.interval_s, gpus=sample) as s:
         s.phase("checks")
@@ -206,7 +206,6 @@ def _test(
 def _run_endpoint(
     ctx: RunContext, base: str, model: str | None, opts: ServeOptions, section: dict[str, Any]
 ) -> None:
-    preset = presets.by_name(opts.preset) if opts.preset else None
     try:
         model = (
             model or (client.served_models(base, api_key=os.environ.get(ENV_API_KEY)) or [""])[0]
@@ -215,6 +214,8 @@ def _run_endpoint(
         ctx.add(CheckResult("serve.checks", Status.FAIL, f"cannot reach {base}: {exc}",
                             hint="check the URL and that the server is listening there"))  # fmt: skip
         return
+    # A known model gets its preset's settings (how to switch reasoning off, tool parser).
+    preset = presets.by_name(opts.preset) if opts.preset else presets.match_model(model)
     section |= {"endpoint": base, "model": model, "preset": preset.to_dict() if preset else None}
     _test(ctx, base, model, preset, opts, section, sample=urlsplit(base).hostname in _LOCAL)
 

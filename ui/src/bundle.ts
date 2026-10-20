@@ -69,7 +69,10 @@ export function mergeRuns(runs: Run[], host: string): { report: Report; source: 
       latest.set(r.name, r);
       source.set(r.name, run);
     }
-    Object.assign(sections, run.report.sections ?? {});
+    for (const [k, v] of Object.entries(run.report.sections ?? {})) {
+      // Benchmarks run separately (bench cpu, later bench thermal): keep the latest of each.
+      sections[k] = k === "bench" ? { ...(sections[k] as object), ...(v as object) } : v;
+    }
   }
   const results = [...latest.values()];
   const first = own[0]?.report;

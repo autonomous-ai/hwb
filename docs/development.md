@@ -71,7 +71,7 @@ Optional hardening in the repo settings:
 ## Running locally
 
 ```bash
-./hwb.sh -v --out /tmp/hwb-runs detect
+./hwb.sh -v --out /tmp/hwb-runs
 ```
 
 On macOS everything degrades to SKIP or FAIL ("no NVIDIA GPU"). That's expected, and a useful check that nothing crashes off-box.
@@ -98,7 +98,7 @@ and `/sys` reads. It checks every output file, including that the one `<out>/rep
 exactly each run's `report.json` and loads nothing external. Describe a new scenario with the `Rig` dataclass. When a new probe reads the
 machine, route it through the fakes there, or the flow test will read the dev machine instead.
 
-## Adding a `detect` check
+## Adding a driver check
 
 1. If the check needs new data, add a field to `GpuFacts` and fill it in `gather()` (add an entry to `probes`).
 2. Write `check_<name>(f: GpuFacts) -> CheckResult`. Keep it pure, with no I/O. Return FAIL/WARN with a `hint` the operator can act on.

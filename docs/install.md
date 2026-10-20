@@ -39,7 +39,7 @@ sha256sum --check --ignore-missing SHA256SUMS
 gh release download --repo autonomous-ai/hwb --pattern 'hwb.pyz' --pattern SHA256SUMS
 sha256sum --check --ignore-missing SHA256SUMS
 
-python3 hwb.pyz detect
+python3 hwb.pyz
 ```
 
 Every release asset also carries a signed build-provenance attestation. To confirm a file was built by this repo's release workflow:
@@ -65,7 +65,7 @@ Copy it over and run it:
 scp dist/hwb.pyz admin@rig01:~
 ssh admin@rig01
 python3 hwb.pyz --version
-chmod +x hwb.pyz && ./hwb.pyz detect     # also works: it has a shebang
+chmod +x hwb.pyz && ./hwb.pyz            # also works: it has a shebang
 ```
 
 The bundle is about 25 KB and needs no other files on the server. Rebuild it after you pull changes.
@@ -77,7 +77,7 @@ Use this when you want to tweak or debug hwb on the server itself.
 ```bash
 git clone https://github.com/autonomous-ai/hwb.git && cd hwb
 ./hwb.sh --version
-./hwb.sh detect
+./hwb.sh
 ```
 
 `hwb.sh` uses the newest `python3.13` … `python3.10` it finds and runs straight from `src/`, so nothing gets installed. If no suitable python3 exists but `uv` does, it falls back to a Python managed by uv.
@@ -101,17 +101,17 @@ Some steps need root: `install --apply`, the DIMM details and the Xid scan.
 
 ```bash
 sudo python3 hwb.pyz install driver --apply
-sudo ./hwb.sh detect
-sudo hwb detect            # with method 3, only if the uv/pipx bin dir is on root's PATH, which it usually isn't
+sudo ./hwb.sh
+sudo hwb                   # with method 3, only if the uv/pipx bin dir is on root's PATH, which it usually isn't
 ```
 
-With method 3, run as root with the full path: `sudo "$(command -v hwb)" detect`.
+With method 3, run as root with the full path: `sudo "$(command -v hwb)"`.
 
 Output from a root run lands in `./hwb-runs/` and is owned by root. Pass `--out /some/dir` to put it somewhere else.
 
 ## Air-gapped servers
 
-`detect`, `info` and the install *plan* need no network. Applying an install does: it needs the distro mirrors, plus `developer.download.nvidia.com` on Debian. The upcoming GPU benchmark and vLLM test need PyPI and Hugging Face, or an offline wheelhouse and model directory (planned).
+`info` and the install *plan* need no network. Applying an install does: it needs the distro mirrors, plus `developer.download.nvidia.com` on Debian. The upcoming GPU benchmark and vLLM test need PyPI and Hugging Face, or an offline wheelhouse and model directory (planned).
 
 ## Uninstall
 

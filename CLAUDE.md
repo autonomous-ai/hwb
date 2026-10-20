@@ -31,7 +31,8 @@ gateway/               Cloudflare Worker (JS): R2 report store, D1 analysis tabl
   install/plan.py      per-distro install plans as data (Step lists); execute() only with --apply
   share/               `hwb submit`: sanitize.py (privacy scrub; keep in sync with gateway/src/sanitize.js),
                        client.py (urllib upload/delete, terminal QR), command.py (preview + confirm flow)
-  bench/               benchmarks (cpu, memory, disk, thermal, gpu): interfaces only so far
+  metrics/sampler.py   background time series while benchmarks run; CSV + downsampled report copy
+  bench/               cpu + thermal (load.py: stress-ng or stdlib workers; analysis.py: pure judging); memory/disk/gpu pending
   serve/               vLLM smoke and load test: interface only so far
 ```
 
@@ -68,7 +69,7 @@ gateway/               Cloudflare Worker (JS): R2 report store, D1 analysis tabl
 uv run --python 3.10 pytest -q   # tests (also verifies 3.10 compatibility)
 make check                       # ruff + mypy --strict + pytest
 make bundle                      # dist/hwb.pyz, single file, stdlib-only
-./hwb.sh detect -v               # run from source on a rig
+./hwb.sh -v                      # run from source on a rig (info is the default)
 ```
 
 Output goes to `hwb-runs/<UTC-timestamp>-<host>-<command>/{report.json,report.md,hwb.log.jsonl}`, plus one combined `hwb-runs/report.html` (Overview + a tab per run). If you change the shape of `report.json`, bump `REPORT_SCHEMA` in `core/report.py`.
@@ -76,12 +77,11 @@ Output goes to `hwb-runs/<UTC-timestamp>-<host>-<command>/{report.json,report.md
 ## Roadmap / status
 
 - [x] core: logging, audit, result model, report, CLI, launcher, bundle
-- [x] `detect`: PCI scan, nouveau, kernel module, binding, Secure Boot, headers, nvidia-smi, Blackwell, PCIe width, persistence, libcuda, nvcc, Xid
-- [x] `info`: system, board, CPU, memory/DIMMs, NUMA, disks, NICs, hwmon temps, GPUs
+- [x] `info` (default) driver checks: PCI scan, nouveau, kernel module, binding, Secure Boot, headers, nvidia-smi, Blackwell, PCIe width, persistence, libcuda, nvcc, Xid
+- [x] `info` inventory: system, board, CPU, memory/DIMMs, NUMA, disks, NICs, hwmon temps, GPUs
 - [x] `install driver|cuda|tools`: dry-run plans + guarded apply
-- [ ] `metrics/sampler.py`: background time series (nvidia-smi `-lms` + hwmon) to CSV for bench and serve
-- [ ] `bench cpu|memory|disk` via stress-ng / sysbench / fio (SKIP with an `hwb install tools` hint if missing)
-- [ ] `bench thermal`: sustained CPU and GPU load with throttle-reason and Xid monitoring
+- [x] `metrics/sampler.py`: background time series (procfs/hwmon/RAPL + nvidia-smi `-lms`) to CSV and the report
+- [x] `bench cpu` (stress-ng or stdlib fallback) and `bench thermal`: phases, time series, charts in the viewer; `bench memory|disk` via stress-ng / sysbench / fio still open
 - [ ] `bench gpu`: torch payload in a uv venv: GEMM TFLOPS per dtype, memory bandwidth, H2D/D2H, P2P, NCCL all-reduce
 - [ ] `serve`: uv venv with vllm, `vllm serve` with TP across GPUs, health wait, `vllm bench serve`, guaranteed teardown
 - [ ] offline bundle: `.pyz` + uv binary + wheelhouse for air-gapped rigs

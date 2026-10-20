@@ -21,7 +21,7 @@ import pytest
 from hwb import cli
 from hwb.core.platform import OSInfo
 from hwb.detect import gpu
-from hwb.metrics import collect
+from hwb.metrics import collect, sampler
 
 UBUNTU = OSInfo("ubuntu", ("debian",), "24.04", "Ubuntu 24.04.1 LTS", "6.8.0-45-generic", "x86_64")
 
@@ -110,6 +110,14 @@ def _build(tmp: Path, rig: Rig) -> tuple[Path, Path]:
     put("proc/cpuinfo", CPUINFO)
     put("proc/meminfo", MEMINFO)
     put("proc/uptime", "93784.21 180000.00\n")
+    put("proc/stat", "cpu  1000 0 500 8000 100 0 0 0 0 0\n")
+    put("proc/loadavg", "0.50 0.40 0.30 1/900 4242\n")
+    for i in range(2):  # one coretemp package sensor per socket
+        hw = f"sys/class/hwmon/hwmon{i}"
+        put(f"{hw}/name", "coretemp\n")
+        put(f"{hw}/temp1_label", f"Package id {i}\n")
+        put(f"{hw}/temp1_input", f"{48000 + i * 2000}\n")
+        put(f"{hw}/temp1_crit", "100000\n")
     cpufreq = "sys/devices/system/cpu/cpu0/cpufreq"
     put(f"{cpufreq}/scaling_governor", "performance\n")
     put(f"{cpufreq}/cpuinfo_max_freq", "3400000\n")
@@ -126,9 +134,19 @@ def _build(tmp: Path, rig: Rig) -> tuple[Path, Path]:
     (fx / "journal.txt").write_text("\n".join(("kernel: Linux version 6.8.0", *rig.xid)) + "\n")
     q = shlex.quote
     if rig.smi_ok:
+        # -lms streams samples forever, like the real tool; the sampler must stop it.
+        # (date has only whole seconds on macOS, so stream for a while like the real tool)
+        lms = (
+            "i=0; while [ $i -lt 15 ]; do "
+            'now=$(date "+%Y/%m/%d %H:%M:%S.000"); '
+            'echo "0, $now, 3, 41, 31.5, 210, 2, 0x0000000000000001"; '
+            'echo "1, $now, 2, 43, 33.0, 210, 2, 0x0000000000000001"; '
+            "i=$((i+1)); sleep 0.2; done; exec sleep 60"
+        )
         _script(
             bin_dir / "nvidia-smi",
-            f'case "$1" in --query-gpu=*) cat {q(str(fx / "smi.csv"))};; *) cat {q(str(fx / "smi.txt"))};; esac',
+            f'case "$*" in *-lms=*) {lms};; --query-gpu=*) cat {q(str(fx / "smi.csv"))};; '
+            f"*) cat {q(str(fx / 'smi.txt'))};; esac",
         )
     else:
         _script(
@@ -142,6 +160,11 @@ def _build(tmp: Path, rig: Rig) -> tuple[Path, Path]:
     _script(bin_dir / "journalctl", f"cat {q(str(fx / 'journal.txt'))}")
     _script(bin_dir / "nvcc", "echo 'Cuda compilation tools, release 12.8, V12.8.93'")
     _script(bin_dir / "lsblk", f"cat {q(str(fx / 'lsblk.json'))}")
+    _script(
+        bin_dir / "stress-ng",
+        't=1; while [ $# -gt 0 ]; do [ "$1" = "--timeout" ] && t="${2%s}"; shift; done; sleep "$t"; '
+        'echo "stress-ng: metrc: [4242] cpu   12345   $t.00   1.00   0.00   6172.50   6000.00"',
+    )
     return bin_dir, root
 
 
@@ -169,6 +192,7 @@ def rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[..., Path]:
             gpu, "scan_pci", functools.partial(gpu.scan_pci, root / "sys/bus/pci/devices")
         )
         monkeypatch.setattr(gpu, "secure_boot_enabled", lambda: True)
+        monkeypatch.setattr(sampler, "ROOT", root)
         return tmp_path / "runs"
 
     return install
@@ -212,7 +236,9 @@ def _page_runs(out: Path) -> list[dict[str, Any]]:
 
 def _outputs(out: Path) -> tuple[Path, dict[str, Any], list[dict[str, Any]]]:
     (run_dir,) = (p for p in out.iterdir() if p.is_dir())
-    assert {"report.json", "report.md", "hwb.log.jsonl"} == {p.name for p in run_dir.iterdir()}
+    names = {p.name for p in run_dir.iterdir()}
+    assert {"report.json", "report.md", "hwb.log.jsonl"} <= names
+    assert "report.html" not in names  # one combined page lives in <out>
     report = json.loads((run_dir / "report.json").read_text())
     runs = _page_runs(out)
     # The viewer gets exactly what report.json holds.
@@ -230,7 +256,7 @@ def _statuses(report: dict[str, Any]) -> dict[str, str]:
 
 def test_all_on_healthy_rig_with_warnings(rig: Callable[..., Path]) -> None:
     out = rig()
-    code = cli.main(["--out", str(out), "all", "--duration", "1"])
+    code = cli.main(["--out", str(out), "all", "--duration", "1", "--interval", "0.25"])
     run_dir, report, _ = _outputs(out)
     st = _statuses(report)
 
@@ -267,10 +293,24 @@ def test_all_on_healthy_rig_with_warnings(rig: Callable[..., Path]) -> None:
 
     audit = [json.loads(line) for line in (run_dir / "hwb.log.jsonl").read_text().splitlines()]
     ran = {e["argv"][0] for e in audit if e.get("msg") == "exit"}
-    assert {"nvidia-smi", "ldconfig", "journalctl", "nvcc", "lsblk"} <= ran
+    assert {"nvidia-smi", "ldconfig", "journalctl", "nvcc", "lsblk", "stress-ng"} <= ran
+
+    # Benchmarks: scores from stress-ng, time series with phases, CPU and GPU temperatures.
+    assert st["bench.cpu"] == "pass" and st["bench.thermal"] == "pass"
+    assert {"bench.memory", "bench.disk", "bench.gpu"} <= {n for n, s in st.items() if s == "skip"}
+    cpu = report["sections"]["bench"]["cpu"]
+    assert cpu["method"] == "stress-ng" and cpu["multi_ops_per_s"] == 6172.5
+    ts = cpu["timeseries"]
+    assert [p["name"] for p in ts["phases"]] == ["idle", "single-core", "all-core", "cooldown"]
+    keys = {s["key"] for s in ts["series"]}
+    assert {"cpu.temp.Package id 0", "cpu.temp.Package id 1", "gpu0.temp", "gpu1.temp"} <= keys
+    assert all(len(s["values"]) == len(ts["t"]) for s in ts["series"])
+    thermal = report["sections"]["bench"]["thermal"]
+    assert thermal["cpu_temp_peak_c"] == 50.0 and thermal["cpu_crit_c"] == 100.0
+    assert (run_dir / "bench-cpu.csv").exists() and (run_dir / "bench-thermal-gpu.csv").exists()
 
 
-def test_detect_on_broken_rig_fails(rig: Callable[..., Path]) -> None:
+def test_info_on_broken_rig_fails(rig: Callable[..., Path]) -> None:
     out = rig(
         Rig(
             modules=("nouveau", "drm"),
@@ -281,7 +321,7 @@ def test_detect_on_broken_rig_fails(rig: Callable[..., Path]) -> None:
             xid=(),
         )
     )
-    code = cli.main(["--out", str(out), "detect"])
+    code = cli.main(["--out", str(out)])  # info is the default command
     _, report, _ = _outputs(out)
     st = _statuses(report)
 
@@ -309,7 +349,13 @@ def test_install_dry_run_plans_without_running(rig: Callable[..., Path]) -> None
 
 @pytest.mark.parametrize(
     "argv",
-    [["info"], ["detect"], ["bench", "all"], ["serve"], ["install", "tools"], ["install", "cuda"]],
+    [
+        ["info"],
+        ["bench", "all", "--duration", "1", "--interval", "0.25"],
+        ["serve"],
+        ["install", "tools"],
+        ["install", "cuda"],
+    ],
     ids=lambda a: "-".join(a),
 )
 def test_every_command_writes_complete_report(rig: Callable[..., Path], argv: list[str]) -> None:
@@ -326,12 +372,12 @@ def test_one_report_html_collects_every_run(rig: Callable[..., Path]) -> None:
     out = rig()
     assert cli.main(["--out", str(out), "info"]) == 0
     assert cli.main(["--out", str(out), "install", "tools"]) == 0
-    (out / "19990101T000000Z-junk-detect").mkdir()
-    (out / "19990101T000000Z-junk-detect" / "report.json").write_text("{truncated")
-    assert cli.main(["--out", str(out), "detect"]) == 0
+    (out / "19990101T000000Z-junk-info").mkdir()
+    (out / "19990101T000000Z-junk-info" / "report.json").write_text("{truncated")
+    assert cli.main(["--out", str(out), "serve"]) == 0
 
     assert [p.name for p in out.glob("**/report.html")] == ["report.html"]
     runs = _page_runs(out)
-    assert [r["report"]["command"] for r in runs] == ["info", "install", "detect"]  # oldest first
+    assert [r["report"]["command"] for r in runs] == ["info", "install", "serve"]  # oldest first
     for r in runs:
         assert r["report"] == json.loads((out / r["id"] / "report.json").read_text())

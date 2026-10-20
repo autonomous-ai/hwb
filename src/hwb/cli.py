@@ -40,10 +40,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--version", action="version", version=f"hwb {__version__}")
     p.add_argument("-v", "--verbose", action="store_true", help="debug logging on stderr")
     p.add_argument("--out", type=Path, default=Path("hwb-runs"), help="base dir for run output")
-    sub = p.add_subparsers(dest="command", required=True)
+    sub = p.add_subparsers(dest="command", metavar="COMMAND")
+    p.set_defaults(command="info")
 
-    sub.add_parser("info", help="collect hardware inventory")
-    sub.add_parser("detect", help="check GPU driver / CUDA health")
+    sub.add_parser(
+        "info", help="check the GPU driver/CUDA stack and collect the hardware inventory (default)"
+    )
 
     ins = sub.add_parser("install", help="plan (default) or apply driver/CUDA/tool installation")
     ins.add_argument("target", choices=("driver", "cuda", "tools"))
@@ -56,9 +58,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     b = sub.add_parser("bench", help="run benchmarks")
     b.add_argument("kind", choices=(*bench.KINDS, "all"))
-    b.add_argument("--duration", type=int, default=60, help="seconds per sustained test")
+    b.add_argument("--duration", type=int, default=60, help="seconds of load per benchmark")
     b.add_argument(
         "--path", type=Path, default=bench.BenchOptions().path, help="scratch dir for disk tests"
+    )
+    b.add_argument(
+        "--interval",
+        type=float,
+        default=bench.BenchOptions().interval_s,
+        help="sampling interval (s)",
     )
 
     s = sub.add_parser("serve", help="host a real model with vLLM and load-test it")
@@ -66,8 +74,14 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--tp", type=int, help="tensor parallel size (default: all GPUs)")
     s.add_argument("--port", type=int, default=8000)
 
-    a = sub.add_parser("all", help="info + detect + all benchmarks (+ serve with --model)")
-    a.add_argument("--duration", type=int, default=60)
+    a = sub.add_parser("all", help="info + all benchmarks (+ serve with --model)")
+    a.add_argument("--duration", type=int, default=60, help="seconds of load per benchmark")
+    a.add_argument(
+        "--interval",
+        type=float,
+        default=bench.BenchOptions().interval_s,
+        help="sampling interval (s)",
+    )
     a.add_argument("--model", help="also run the vLLM test with this model")
 
     sb = sub.add_parser(
@@ -98,11 +112,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _cmd_info(ctx: RunContext, args: argparse.Namespace) -> None:
-    run_info(ctx)
-
-
-def _cmd_detect(ctx: RunContext, args: argparse.Namespace) -> None:
     run_detect(ctx)
+    run_info(ctx)
 
 
 def _cmd_install(ctx: RunContext, args: argparse.Namespace) -> None:
@@ -117,7 +128,8 @@ def _cmd_install(ctx: RunContext, args: argparse.Namespace) -> None:
 
 
 def _cmd_bench(ctx: RunContext, args: argparse.Namespace) -> None:
-    bench.run(ctx, args.kind, bench.BenchOptions(duration_s=args.duration, path=args.path))
+    opts = bench.BenchOptions(duration_s=args.duration, path=args.path, interval_s=args.interval)
+    bench.run(ctx, args.kind, opts)
 
 
 def _cmd_serve(ctx: RunContext, args: argparse.Namespace) -> None:
@@ -125,16 +137,14 @@ def _cmd_serve(ctx: RunContext, args: argparse.Namespace) -> None:
 
 
 def _cmd_all(ctx: RunContext, args: argparse.Namespace) -> None:
-    run_info(ctx)
-    run_detect(ctx)
-    bench.run(ctx, "all", bench.BenchOptions(duration_s=args.duration))
+    _cmd_info(ctx, args)
+    bench.run(ctx, "all", bench.BenchOptions(duration_s=args.duration, interval_s=args.interval))
     if args.model:
         serve.run(ctx, serve.ServeOptions(model=args.model))
 
 
 COMMANDS: dict[str, Callable[[RunContext, argparse.Namespace], None]] = {
     "info": _cmd_info,
-    "detect": _cmd_detect,
     "install": _cmd_install,
     "bench": _cmd_bench,
     "serve": _cmd_serve,

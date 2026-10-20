@@ -2,17 +2,24 @@
 
 Rules: argv lists only (never shell=True), every call has a timeout, every call is
 audit-logged (argv, exit code, duration, output tail) to the run's JSONL log.
+
+``run`` is for short commands. ``spawn`` is for long-running children (load generators,
+``nvidia-smi -lms``): each gets its own process group and is torn down when the ``with``
+block exits, however it exits, so nothing keeps loading the machine after hwb stops.
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import shutil
+import signal
 import subprocess
 import time
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass, field
+from pathlib import Path
 
 from .errors import ToolMissingError
 from .log import fields
@@ -112,3 +119,107 @@ def run(
         ),
     )
     return result
+
+
+STOP_GRACE_S = 5.0
+
+
+@dataclass
+class Child:
+    """A running child started by ``spawn``; stdout/stderr go to files, read them after."""
+
+    argv: tuple[str, ...]
+    popen: subprocess.Popen[bytes]
+    started: float = field(default_factory=time.monotonic)
+
+    @property
+    def returncode(self) -> int | None:
+        return self.popen.poll()
+
+    def wait(self, timeout: float) -> int | None:
+        """Exit code, or None if still running after ``timeout`` seconds."""
+        try:
+            return self.popen.wait(timeout=max(timeout, 0.0))
+        except subprocess.TimeoutExpired:
+            return None
+
+    def stop(self, grace: float = STOP_GRACE_S) -> int:
+        """SIGTERM the whole process group, SIGKILL whatever is left after ``grace``."""
+        for sig, wait_s in ((signal.SIGTERM, grace), (signal.SIGKILL, grace)):
+            if self.popen.poll() is not None:
+                break
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(self.popen.pid, sig)
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                self.popen.wait(timeout=wait_s)
+        # Workers forked by the child (stress-ng) can outlive it; the group goes too.
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(self.popen.pid, signal.SIGKILL)
+        return self.popen.wait()
+
+
+def _tail(path: Path | None) -> str:
+    if path is None:
+        return ""
+    try:
+        with path.open("rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(fh.tell() - _AUDIT_TAIL, 0))
+            return fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+@contextlib.contextmanager
+def spawn(
+    argv: Sequence[str],
+    *,
+    stdout: Path | None = None,
+    stderr: Path | None = None,
+    env: Mapping[str, str] | None = None,
+) -> Iterator[Child]:
+    """Start ``argv`` in its own process group; it is stopped when the block exits.
+
+    Output goes to the given files (or is discarded). Raises ToolMissingError if argv[0]
+    is not found.
+    """
+    if not argv:
+        raise ValueError("empty argv")
+    exe = which(argv[0])
+    if exe is None:
+        raise ToolMissingError(argv[0])
+    full_env = {**os.environ, **_BASE_ENV, **(env or {})}
+    with contextlib.ExitStack() as files:
+        out = files.enter_context(stdout.open("wb")) if stdout else subprocess.DEVNULL
+        err = files.enter_context(stderr.open("wb")) if stderr else subprocess.DEVNULL
+        log.debug("spawn", extra=fields(argv=list(argv)))
+        popen = subprocess.Popen(
+            [exe, *argv[1:]],
+            stdin=subprocess.DEVNULL,
+            stdout=out,
+            stderr=err,
+            env=full_env,
+            start_new_session=True,  # own process group, so stop() reaches its workers
+        )
+        child = Child(tuple(argv), popen)
+        try:
+            yield child
+        finally:
+            rc = child.stop()
+            log.debug(
+                "exit",
+                extra=fields(
+                    argv=list(argv),
+                    rc=rc,
+                    duration_s=round(time.monotonic() - child.started, 3),
+                    stdout_tail=_tail(stdout),
+                    stderr_tail=_tail(stderr),
+                ),
+            )
+
+
+@contextlib.contextmanager
+def spawn_many(argvs: Sequence[Sequence[str]], *, stdout: Sequence[Path]) -> Iterator[list[Child]]:
+    """``spawn`` for a set of identical workers; all are stopped when the block exits."""
+    with contextlib.ExitStack() as stack:
+        yield [stack.enter_context(spawn(a, stdout=o)) for a, o in zip(argvs, stdout, strict=True)]

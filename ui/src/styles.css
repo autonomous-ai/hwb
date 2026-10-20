@@ -63,7 +63,7 @@ button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px soli
 [role="tab"][aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); font-weight: 600; }
 .run-tabs {
   flex: 1; min-width: 0; display: flex; gap: 22px; align-self: stretch;
-  overflow-x: auto; scrollbar-width: thin; padding: 0 4px;
+  overflow-x: auto; overflow-y: hidden; scrollbar-width: none; padding: 0 4px;
 }
 .run-tabs [role="tab"] { font-size: 14px; }
 .sq { width: 10px; height: 10px; border-radius: 2px; background: var(--skip); flex: none; }
@@ -71,11 +71,15 @@ button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px soli
 .sq.warn { background: var(--warn); }
 .sq.fail { background: var(--fail); }
 .sq.error { background: var(--error); }
+/* Underlines are inset shadows, not borders with negative margins: nothing may overflow the
+   strip, or the horizontal scroller grows a vertical scrollbar. */
 .section-tabs {
-  display: flex; gap: 26px; margin: 28px 0 22px; border-bottom: 2px solid var(--heavy);
-  overflow-x: auto; scrollbar-width: thin;
+  display: flex; gap: 26px; margin: 28px 0 22px; box-shadow: inset 0 -2px 0 var(--heavy);
+  overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
 }
-.section-tabs [role="tab"] { font-size: 16px; padding-bottom: 8px; margin-bottom: -2px; border-bottom-width: 4px; }
+.run-tabs::-webkit-scrollbar, .section-tabs::-webkit-scrollbar { display: none; }
+.section-tabs [role="tab"] { font-size: 16px; padding: 0 2px 10px; border-bottom: 0; }
+.section-tabs [role="tab"][aria-selected="true"] { box-shadow: inset 0 -4px 0 var(--ink); }
 .count { font-size: 12px; font-weight: 700; background: var(--tint); border: 1px solid var(--rule); border-radius: 3px; padding: 0 5px; color: var(--ink); }
 .panel > h2:first-child { margin-top: 0; }
 .panel h2 { font-size: 18px; margin: 32px 0 12px; padding-top: 0; border-top: 0; }
@@ -200,6 +204,49 @@ tbody tr:nth-child(even) td { background: var(--tint); }
 .raw > summary { font-size: 15px; }
 .raw button { margin-top: 10px; }
 .raw pre { margin-top: 10px; max-height: 480px; overflow: auto; font-size: 12px; background: var(--tint); padding: 10px 12px; border-radius: 4px; }
+/* benchmarks */
+.benches { display: grid; gap: 40px; }
+.bench-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding-bottom: 6px; border-bottom: 1px solid var(--heavy); margin-bottom: 14px; }
+.bench-head h3 { margin: 0; font-size: 17px; }
+.stat-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin: 0 0 14px; }
+.stat-tiles > div { border: 1px solid var(--rule); border-radius: 4px; padding: 8px 12px; }
+.stat-tiles dt { font-size: 13px; color: var(--muted); }
+.stat-tiles dd { margin: 2px 0 0; font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.stat-tiles dd.stat-sub { font-size: 12px; font-weight: 400; color: var(--muted); margin: 0; }
+.findings { list-style: none; margin: 0 0 14px; padding: 0; display: grid; gap: 6px; }
+.finding { display: flex; gap: 10px; align-items: baseline; }
+.finding-hint { color: var(--muted); }
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 18px 28px; }
+.chart { margin: 0; min-width: 0; }
+.chart figcaption { display: flex; gap: 8px; align-items: baseline; margin-bottom: 4px; }
+.chart-title { font-weight: 600; font-size: 14px; }
+.chart-unit { color: var(--muted); font-size: 12px; }
+.legend { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0 0 4px; padding: 0; font-size: 12px; color: var(--muted); }
+.legend li { display: inline-flex; align-items: center; gap: 5px; }
+.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; flex: none; }
+.chart-box { position: relative; }
+.chart svg { display: block; overflow: visible; font-family: inherit; }
+.chart svg:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+.chart .band-a { fill: #f6f7f9; }
+.chart .band-b { fill: #ffffff; }
+.chart .phase-label { font-size: 11px; fill: var(--muted); }
+.chart .grid { stroke: #e7e9ec; stroke-width: 1; }
+.chart .tick { font-size: 11px; fill: var(--muted); font-variant-numeric: tabular-nums; }
+.chart .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart .end-label { font-size: 11px; fill: var(--ink); }
+.chart .limit line { stroke: var(--fail); stroke-width: 1.5; stroke-dasharray: 5 4; }
+.chart .limit text { font-size: 11px; fill: var(--ink); font-weight: 600; paint-order: stroke; stroke: #fff; stroke-width: 3px; }
+.chart .crosshair line { stroke: var(--ink); stroke-width: 1; stroke-dasharray: 2 3; }
+.chart .crosshair circle { stroke: #fff; stroke-width: 2; }
+.tooltip {
+  position: absolute; pointer-events: none; min-width: 170px; background: #fff; border: 1px solid var(--rule);
+  border-radius: 4px; box-shadow: 0 2px 10px rgb(0 0 0 / 0.08); padding: 6px 9px; font-size: 12px;
+}
+.tt-time { color: var(--muted); margin-bottom: 3px; }
+.tt-row { display: flex; align-items: center; gap: 6px; }
+.tt-row b { margin-left: auto; font-variant-numeric: tabular-nums; }
+.phase-table caption { text-align: left; font-weight: 600; font-size: 14px; padding: 14px 0 6px; }
+
 footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
 
 @media (max-width: 760px) {
@@ -209,6 +256,7 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
   .check-body { grid-column: 1 / -1; }
   input[type="search"] { min-width: 0; flex: 1; }
   .brand, .topnav .pill { display: none; }
+  .charts { grid-template-columns: 1fr; }
 }
 @media print {
   .topnav, .section-tabs, .tools, .chips, .raw, .small { display: none; }

@@ -22,7 +22,10 @@ export function summarize(bundle) {
   const sections = {};
   for (const { report } of runs) {
     for (const r of report.results) latest.set(r.name, r);
-    Object.assign(sections, obj(report.sections));
+    for (const [k, v] of Object.entries(obj(report.sections))) {
+      // Benchmarks run separately (bench cpu, then bench thermal): keep the latest of each.
+      sections[k] = k === "bench" ? { ...obj(sections[k]), ...obj(v) } : v;
+    }
   }
   const checks = [...latest.values()].map((r) => ({ name: r.name.slice(0, 120), status: r.status }));
   const counts = Object.fromEntries(SEVERITY.map((s) => [s, 0]));
@@ -36,6 +39,10 @@ export function summarize(bundle) {
   const cpu = obj(inv.cpu);
   const gpuRows = [obj(inv.gpus).gpus, facts.smi_rows].find((r) => Array.isArray(r) && r.length) ?? [];
   const smiCheck = latest.get("gpu.nvidia_smi");
+  const bench = obj(sections.bench);
+  const bcpu = obj(bench.cpu);
+  const thermal = obj(bench.thermal);
+  const peaks = [num(bcpu.cpu_temp_peak_c), num(thermal.cpu_temp_peak_c)].filter((v) => v !== null);
 
   return {
     checks,
@@ -62,6 +69,13 @@ export function summarize(bundle) {
       os: str(system.os, 120),
       kernel: str(system.kernel, 120),
       distro_family: str(system.distro_family, 16),
+      cpu_score: num(bcpu.multi_ops_per_s),
+      cpu_single_score: num(bcpu.single_ops_per_s),
+      cpu_score_method: str(bcpu.method, 16),
+      cpu_temp_peak_c: peaks.length ? Math.max(...peaks) : null,
+      cpu_temp_margin_c: num(thermal.cpu_temp_margin_c),
+      cpu_clock_sag_pct: num(thermal.cpu_clock_sag_pct),
+      thermal_verdict: latest.get("bench.thermal")?.status ?? null,
     },
   };
 }

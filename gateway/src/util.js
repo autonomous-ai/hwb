@@ -46,7 +46,7 @@ const PAGE_CSP = [
   "default-src 'none'",
   "script-src 'unsafe-inline'",
   "style-src 'unsafe-inline'",
-  "img-src data: blob:",
+  "img-src 'self' data: blob:", // 'self': the favicon
   "connect-src 'none'",
   "base-uri 'none'",
   "form-action 'none'",

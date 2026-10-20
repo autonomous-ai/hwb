@@ -1,3 +1,4 @@
+import ICONS from "./icons.gen.js"; // generated from assets/*.png by `npm run embed`
 import VIEWER from "./viewer.gen.js"; // generated from src/hwb/assets/index.html by `npm run embed`
 
 const SLOT = '<script id="hwb-report" type="application/json">__HWB_REPORT__</script>';
@@ -15,6 +16,7 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
 function plainPage(title, body) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title)}</title>
+<link rel="icon" href="/favicon.png" type="image/png"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <style>
 body{margin:0;font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#111;background:#fff}
 main{max-width:640px;margin:12vh auto;padding:0 16px}
@@ -39,4 +41,19 @@ export function notFoundPage() {
     `<h1>Report not found</h1>
 <p>This report does not exist, has been deleted by its uploader, or has expired.</p>`,
   );
+}
+
+const ICON_PATHS = {
+  "/favicon.ico": "favicon.png", // browsers ask for this by default; it is a PNG, as on autonomous.ai
+  "/favicon.png": "favicon.png",
+  "/apple-touch-icon.png": "apple-touch-icon.png",
+};
+const decoded = new Map();
+
+/** The icon for a path, or null. Bytes are decoded once per isolate. */
+export function icon(path) {
+  const name = ICON_PATHS[path];
+  if (!name) return null;
+  if (!decoded.has(name)) decoded.set(name, Uint8Array.from(atob(ICONS[name]), (c) => c.charCodeAt(0)));
+  return decoded.get(name);
 }

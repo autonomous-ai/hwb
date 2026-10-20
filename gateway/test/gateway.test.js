@@ -328,3 +328,22 @@ describe("benchmarks", () => {
     expect(stats.cpu_bench.some((r) => r.method === "stress-ng" && r.runs >= 1)).toBe(true);
   });
 });
+
+describe("favicon", () => {
+  const PNG = [0x89, 0x50, 0x4e, 0x47];
+  it("serves the autonomous.ai icons and links them from pages", async () => {
+    for (const path of ["/favicon.ico", "/favicon.png", "/apple-touch-icon.png"]) {
+      const res = await SELF.fetch(`${BASE}${path}`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("Content-Type")).toBe("image/png");
+      expect(res.headers.get("Cache-Control")).toContain("max-age");
+      expect([...new Uint8Array(await res.arrayBuffer()).slice(0, 4)]).toEqual(PNG);
+    }
+    expect((await SELF.fetch(`${BASE}/favicon.ico`, { method: "HEAD" })).status).toBe(200);
+    const landing = await (await SELF.fetch(`${BASE}/`)).text();
+    expect(landing).toContain('<link rel="icon" href="/favicon.png"');
+    const { body } = await submit(bundleOf(healthy));
+    const page = await SELF.fetch(`${BASE}/r/${body.id}`);
+    expect(page.headers.get("Content-Security-Policy")).toContain("img-src 'self'");
+  });
+});

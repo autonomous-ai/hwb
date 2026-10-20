@@ -1,0 +1,422 @@
+{
+  "schema": 1,
+  "tool": {
+    "name": "hwb",
+    "version": "0.1.0"
+  },
+  "command": "all",
+  "host": "gpu-rig-01",
+  "started_at": "2026-10-20T06:10:03.271903+00:00",
+  "finished_at": "2026-10-20T06:10:03.982596+00:00",
+  "exit_code": 0,
+  "results": [
+    {
+      "name": "info.system",
+      "status": "pass",
+      "summary": "Ubuntu 24.04.1 LTS / 6.8.0-45-generic",
+      "hint": null,
+      "data": {}
+    },
+    {
+      "name": "info.board",
+      "status": "pass",
+      "summary": "collected",
+      "hint": null,
+      "data": {}
+    },
+    {
+      "name": "info.cpu",
+      "status": "pass",
+      "summary": "2x Intel(R) Xeon(R) Gold 6430 (12 threads)",
+      "hint": null,
+      "data": {}
+    },
+    {
+      "name": "info.memory",
+      "status": "pass",
+      "summary": "503.5 GiB",
+      "hint": null,
+      "data": {}
+    },
+    {
+      "name": "info.numa",
+      "status": "pass",
+      "summary": "collected",
+      "hint": null,
+      "data": {}
+    },
+    {
+      "name": "info.disks",
+      "status": "pass",
+      "summary": "1 disk(s)",
+      "hint": null,
+      "data": {}
+    },
+    {
+      "name": "info.network",
+      "status": "pass",
+      "summary": "collected",
+      "hint": null,
+      "data": {}
+    },
+    {
+      "name": "info.sensors",
+      "status": "pass",
+      "summary": "collected",
+      "hint": null,
+      "data": {}
+    },
+    {
+      "name": "info.gpus",
+      "status": "pass",
+      "summary": "NVIDIA GeForce RTX 5090, NVIDIA GeForce RTX 5090",
+      "hint": null,
+      "data": {}
+    },
+    {
+      "name": "gpu.pci",
+      "status": "pass",
+      "summary": "2 NVIDIA GPU(s) on PCI bus",
+      "hint": null,
+      "data": {
+        "devices": [
+          {
+            "address": "0000:01:00.0",
+            "device_id": "0x2b85",
+            "pci_class": "0x030000",
+            "driver": "nvidia"
+          },
+          {
+            "address": "0000:41:00.0",
+            "device_id": "0x2b85",
+            "pci_class": "0x030000",
+            "driver": "nvidia"
+          }
+        ]
+      }
+    },
+    {
+      "name": "gpu.nouveau",
+      "status": "pass",
+      "summary": "nouveau not loaded",
+      "hint": null,
+      "data": {}
+    },
+    {
+      "name": "gpu.kernel_module",
+      "status": "pass",
+      "summary": "nvidia 580.65.06 (open kernel module)",
+      "hint": null,
+      "data": {
+        "version": "580.65.06",
+        "open_module": true
+      }
+    },
+    {
+      "name": "gpu.bound",
+      "status": "pass",
+      "summary": "all GPUs bound to nvidia",
+      "hint": null,
+      "data": {}
+    },
+    {
+      "name": "gpu.secure_boot",
+      "status": "pass",
+      "summary": "Secure Boot enabled; module signed",
+      "hint": null,
+      "data": {}
+    },
+    {
+      "name": "gpu.kernel_headers",
+      "status": "warn",
+      "summary": "no headers for the running kernel",
+      "hint": "DKMS cannot rebuild the driver on kernel upgrade; install linux-headers",
+      "data": {}
+    },
+    {
+      "name": "gpu.nvidia_smi",
+      "status": "pass",
+      "summary": "2 GPU(s): NVIDIA GeForce RTX 5090, NVIDIA GeForce RTX 5090 (CUDA 13.0)",
+      "hint": null,
+      "data": {
+        "gpus": [
+          {
+            "index": "0",
+            "name": "NVIDIA GeForce RTX 5090",
+            "uuid": "GPU-00000000-aaaa",
+            "pci.bus_id": "00000000:01:00.0",
+            "driver_version": "580.65.06",
+            "memory.total": "32607",
+            "compute_cap": "12.0",
+            "persistence_mode": "Enabled",
+            "pcie.link.gen.max": "5",
+            "pcie.link.width.current": "16",
+            "pcie.link.width.max": "16",
+            "temperature.gpu": "34",
+            "power.limit": "575.00"
+          },
+          {
+            "index": "1",
+            "name": "NVIDIA GeForce RTX 5090",
+            "uuid": "GPU-00000000-bbbb",
+            "pci.bus_id": "00000000:41:00.0",
+            "driver_version": "580.65.06",
+            "memory.total": "32607",
+            "compute_cap": "12.0",
+            "persistence_mode": "Disabled",
+            "pcie.link.gen.max": "5",
+            "pcie.link.width.current": "8",
+            "pcie.link.width.max": "16",
+            "temperature.gpu": "71",
+            "power.limit": "575.00"
+          }
+        ],
+        "cuda_driver_api": "13.0"
+      }
+    },
+    {
+      "name": "gpu.blackwell",
+      "status": "pass",
+      "summary": "open kernel module, driver supports Blackwell",
+      "hint": null,
+      "data": {}
+    },
+    {
+      "name": "gpu.pcie_link",
+      "status": "warn",
+      "summary": "PCIe link narrower than supported: GPU1 x8/x16",
+      "hint": "check slot wiring/bifurcation and risers; verify with hwb bench gpu (H2D bandwidth)",
+      "data": {}
+    },
+    {
+      "name": "gpu.persistence",
+      "status": "warn",
+      "summary": "persistence mode off on GPU 1",
+      "hint": "systemctl enable --now nvidia-persistenced",
+      "data": {}
+    },
+    {
+      "name": "gpu.libcuda",
+      "status": "pass",
+      "summary": "libcuda.so.1 at /lib/x86_64-linux-gnu/libcuda.so.1",
+      "hint": null,
+      "data": {}
+    },
+    {
+      "name": "gpu.cuda_toolkit",
+      "status": "pass",
+      "summary": "CUDA toolkit 12.8",
+      "hint": null,
+      "data": {}
+    },
+    {
+      "name": "gpu.xid",
+      "status": "warn",
+      "summary": "1 NVRM Xid event(s) this boot",
+      "hint": "look up the Xid codes; 79/48/63/64 usually mean hardware, power or thermal trouble",
+      "data": {
+        "sample": [
+          "NVRM: Xid (PCI:0000:41:00): 13, pid=4242, name=python3, Graphics Exception"
+        ]
+      }
+    },
+    {
+      "name": "bench.cpu",
+      "status": "skip",
+      "summary": "not implemented yet",
+      "hint": null,
+      "data": {}
+    },
+    {
+      "name": "bench.memory",
+      "status": "skip",
+      "summary": "not implemented yet",
+      "hint": null,
+      "data": {}
+    },
+    {
+      "name": "bench.disk",
+      "status": "skip",
+      "summary": "not implemented yet",
+      "hint": null,
+      "data": {}
+    },
+    {
+      "name": "bench.thermal",
+      "status": "skip",
+      "summary": "not implemented yet",
+      "hint": null,
+      "data": {}
+    },
+    {
+      "name": "bench.gpu",
+      "status": "skip",
+      "summary": "not implemented yet",
+      "hint": null,
+      "data": {}
+    }
+  ],
+  "sections": {
+    "inventory": {
+      "system": {
+        "os": "Ubuntu 24.04.1 LTS",
+        "distro_family": "debian",
+        "kernel": "6.8.0-45-generic",
+        "machine": "x86_64",
+        "uptime_s": 93784.21
+      },
+      "board": {
+        "sys_vendor": "Supermicro",
+        "product_name": "SYS-421GE-TNRT",
+        "board_vendor": null,
+        "board_name": null,
+        "bios_version": "2.1",
+        "bios_date": null
+      },
+      "cpu": {
+        "models": [
+          "Intel(R) Xeon(R) Gold 6430"
+        ],
+        "sockets": 2,
+        "physical_cores": 64,
+        "logical_cpus": 12,
+        "isa": [
+          "amx_bf16",
+          "amx_tile",
+          "avx2",
+          "avx512f"
+        ],
+        "governor": "performance",
+        "max_mhz": 3400
+      },
+      "memory": {
+        "total_gib": 503.5,
+        "swap_gib": 8.0,
+        "hugepages_total": 0,
+        "dimms": null
+      },
+      "numa": {
+        "nodes": {}
+      },
+      "disks": {
+        "devices": [
+          {
+            "name": "nvme0n1",
+            "model": "SAMSUNG MZQL23T8HCLS",
+            "size": 3840755982336,
+            "rota": false,
+            "tran": "nvme",
+            "type": "disk"
+          }
+        ]
+      },
+      "network": {
+        "nics": []
+      },
+      "sensors": {
+        "temperatures_c": {}
+      },
+      "gpus": {
+        "gpus": [
+          {
+            "index": "0",
+            "name": "NVIDIA GeForce RTX 5090",
+            "uuid": "GPU-00000000-aaaa",
+            "pci.bus_id": "00000000:01:00.0",
+            "driver_version": "580.65.06",
+            "memory.total": "32607",
+            "compute_cap": "12.0",
+            "persistence_mode": "Enabled",
+            "pcie.link.gen.max": "5",
+            "pcie.link.width.current": "16",
+            "pcie.link.width.max": "16",
+            "temperature.gpu": "34",
+            "power.limit": "575.00"
+          },
+          {
+            "index": "1",
+            "name": "NVIDIA GeForce RTX 5090",
+            "uuid": "GPU-00000000-bbbb",
+            "pci.bus_id": "00000000:41:00.0",
+            "driver_version": "580.65.06",
+            "memory.total": "32607",
+            "compute_cap": "12.0",
+            "persistence_mode": "Disabled",
+            "pcie.link.gen.max": "5",
+            "pcie.link.width.current": "8",
+            "pcie.link.width.max": "16",
+            "temperature.gpu": "71",
+            "power.limit": "575.00"
+          }
+        ]
+      }
+    },
+    "gpu_facts": {
+      "pci": [
+        {
+          "address": "0000:01:00.0",
+          "device_id": "0x2b85",
+          "pci_class": "0x030000",
+          "driver": "nvidia"
+        },
+        {
+          "address": "0000:41:00.0",
+          "device_id": "0x2b85",
+          "pci_class": "0x030000",
+          "driver": "nvidia"
+        }
+      ],
+      "modules": [
+        "nvidia",
+        "nvidia_drm",
+        "nvidia_modeset",
+        "nvidia_uvm"
+      ],
+      "kernel_driver": {
+        "version": "580.65.06",
+        "open_module": true
+      },
+      "smi_rows": [
+        {
+          "index": "0",
+          "name": "NVIDIA GeForce RTX 5090",
+          "uuid": "GPU-00000000-aaaa",
+          "pci.bus_id": "00000000:01:00.0",
+          "driver_version": "580.65.06",
+          "memory.total": "32607",
+          "compute_cap": "12.0",
+          "persistence_mode": "Enabled",
+          "pcie.link.gen.max": "5",
+          "pcie.link.width.current": "16",
+          "pcie.link.width.max": "16",
+          "temperature.gpu": "34",
+          "power.limit": "575.00"
+        },
+        {
+          "index": "1",
+          "name": "NVIDIA GeForce RTX 5090",
+          "uuid": "GPU-00000000-bbbb",
+          "pci.bus_id": "00000000:41:00.0",
+          "driver_version": "580.65.06",
+          "memory.total": "32607",
+          "compute_cap": "12.0",
+          "persistence_mode": "Disabled",
+          "pcie.link.gen.max": "5",
+          "pcie.link.width.current": "8",
+          "pcie.link.width.max": "16",
+          "temperature.gpu": "71",
+          "power.limit": "575.00"
+        }
+      ],
+      "smi_error": null,
+      "cuda_driver_api": "13.0",
+      "secure_boot": true,
+      "headers_present": false,
+      "libcuda": "/lib/x86_64-linux-gnu/libcuda.so.1",
+      "nvcc_version": "12.8",
+      "xid_lines": [
+        "NVRM: Xid (PCI:0000:41:00): 13, pid=4242, name=python3, Graphics Exception"
+      ]
+    }
+  }
+}

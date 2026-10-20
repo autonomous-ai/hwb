@@ -15,6 +15,26 @@ make bundle      # dist/hwb.pyz
 make clean
 ```
 
+### Report viewer (`ui/`)
+
+`report.html` is a React + TypeScript app built with Vite and
+[`vite-plugin-singlefile`](https://github.com/richardtallent/vite-plugin-singlefile) into **one**
+self-contained `src/hwb/assets/index.html`, with all JS and CSS inlined. That file is committed and
+shipped as package data. At run time `core/report_html.py` gathers every `*/report.json` in the output directory and drops them into its
+`<script id="hwb-report" type="application/json">` slot, so the rig, the pyz and the Python tests
+never need Node. You need Node 22 only to change the viewer:
+
+```bash
+cd ui && npm ci
+npm run dev        # live preview: all fixtures as one output directory (Overview + run tabs)
+make ui-test       # tsc + vitest
+make ui            # rebuild src/hwb/assets/index.html; commit it with your change
+```
+
+The fixtures in `ui/src/fixtures/` are real `report.json` files from the simulated rigs in
+`tests/test_flow.py`, with the host name anonymised. CI rebuilds the viewer and fails if the
+committed `index.html` is stale.
+
 CI-style compatibility check against the oldest supported Python:
 
 ```bash
@@ -67,8 +87,16 @@ src/hwb/
   metrics/collect.py inventory collectors; COLLECTORS dict
   install/plan.py    per-distro Step lists; execute()
   bench/, serve/     work in progress
+  assets/index.html  prebuilt report viewer (generated from ui/, do not edit)
 tests/               parser and check tests with synthetic inputs
+ui/                  report viewer source (React + Vite, single-file build)
 ```
+
+`tests/test_flow.py` runs the real CLI end to end against a simulated rig: shell-script stand-ins for
+`nvidia-smi`, `ldconfig`, `journalctl`, `nvcc` and `lsblk` on `PATH`, plus a fake root for `/proc`
+and `/sys` reads. It checks every output file, including that the one `<out>/report.html` embeds
+exactly each run's `report.json` and loads nothing external. Describe a new scenario with the `Rig` dataclass. When a new probe reads the
+machine, route it through the fakes there, or the flow test will read the dev machine instead.
 
 ## Adding a `detect` check
 

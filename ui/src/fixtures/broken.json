@@ -1,0 +1,155 @@
+{
+  "schema": 1,
+  "tool": {
+    "name": "hwb",
+    "version": "0.1.0"
+  },
+  "command": "detect",
+  "host": "gpu-rig-01",
+  "started_at": "2026-10-20T06:10:03.997390+00:00",
+  "finished_at": "2026-10-20T06:10:04.435141+00:00",
+  "exit_code": 1,
+  "results": [
+    {
+      "name": "gpu.pci",
+      "status": "pass",
+      "summary": "2 NVIDIA GPU(s) on PCI bus",
+      "hint": null,
+      "data": {
+        "devices": [
+          {
+            "address": "0000:01:00.0",
+            "device_id": "0x2b85",
+            "pci_class": "0x030000",
+            "driver": "nouveau"
+          },
+          {
+            "address": "0000:41:00.0",
+            "device_id": "0x2b85",
+            "pci_class": "0x030000",
+            "driver": "nouveau"
+          }
+        ]
+      }
+    },
+    {
+      "name": "gpu.nouveau",
+      "status": "fail",
+      "summary": "nouveau driver is loaded",
+      "hint": "install the NVIDIA driver (hwb install driver), which blacklists nouveau; reboot",
+      "data": {}
+    },
+    {
+      "name": "gpu.kernel_module",
+      "status": "fail",
+      "summary": "nvidia kernel module not loaded",
+      "hint": "hwb install driver --apply, then reboot",
+      "data": {}
+    },
+    {
+      "name": "gpu.bound",
+      "status": "fail",
+      "summary": "2 GPU(s) not bound to the nvidia driver: 0000:01:00.0, 0000:41:00.0",
+      "hint": "check dmesg for NVRM errors (unsupported GPU for this driver branch?)",
+      "data": {
+        "drivers": {
+          "0000:01:00.0": "nouveau",
+          "0000:41:00.0": "nouveau"
+        }
+      }
+    },
+    {
+      "name": "gpu.secure_boot",
+      "status": "warn",
+      "summary": "Secure Boot enabled and nvidia module not loaded",
+      "hint": "enroll the DKMS MOK key (mokutil --import) or disable Secure Boot",
+      "data": {}
+    },
+    {
+      "name": "gpu.kernel_headers",
+      "status": "warn",
+      "summary": "no headers for the running kernel",
+      "hint": "DKMS cannot rebuild the driver on kernel upgrade; install linux-headers",
+      "data": {}
+    },
+    {
+      "name": "gpu.nvidia_smi",
+      "status": "fail",
+      "summary": "nvidia-smi failed: NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA driver.",
+      "hint": "driver userspace missing or mismatched with the kernel module; reboot after install",
+      "data": {}
+    },
+    {
+      "name": "gpu.blackwell",
+      "status": "skip",
+      "summary": "no Blackwell-class GPUs",
+      "hint": null,
+      "data": {}
+    },
+    {
+      "name": "gpu.pcie_link",
+      "status": "skip",
+      "summary": "nvidia-smi unavailable",
+      "hint": null,
+      "data": {}
+    },
+    {
+      "name": "gpu.persistence",
+      "status": "skip",
+      "summary": "nvidia-smi unavailable",
+      "hint": null,
+      "data": {}
+    },
+    {
+      "name": "gpu.libcuda",
+      "status": "fail",
+      "summary": "libcuda.so.1 not in linker cache",
+      "hint": "driver userspace libraries missing; reinstall the driver package",
+      "data": {}
+    },
+    {
+      "name": "gpu.cuda_toolkit",
+      "status": "pass",
+      "summary": "CUDA toolkit 12.8",
+      "hint": null,
+      "data": {}
+    },
+    {
+      "name": "gpu.xid",
+      "status": "pass",
+      "summary": "no Xid events this boot",
+      "hint": null,
+      "data": {}
+    }
+  ],
+  "sections": {
+    "gpu_facts": {
+      "pci": [
+        {
+          "address": "0000:01:00.0",
+          "device_id": "0x2b85",
+          "pci_class": "0x030000",
+          "driver": "nouveau"
+        },
+        {
+          "address": "0000:41:00.0",
+          "device_id": "0x2b85",
+          "pci_class": "0x030000",
+          "driver": "nouveau"
+        }
+      ],
+      "modules": [
+        "nouveau"
+      ],
+      "kernel_driver": null,
+      "smi_rows": null,
+      "smi_error": "NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA driver.",
+      "cuda_driver_api": null,
+      "secure_boot": true,
+      "headers_present": false,
+      "libcuda": null,
+      "nvcc_version": "12.8",
+      "xid_lines": []
+    }
+  }
+}

@@ -28,13 +28,20 @@ sudo reboot
 python3 hwb.pyz detect               # should now be all PASS/SKIP
 ```
 
-Each run writes its results to `./hwb-runs/<UTC time>-<host>-<command>/`:
+Open **`./hwb-runs/report.html`**: one self-contained page for every run in that folder. It works
+offline and needs no server, so you can attach it for the vendor. The **Overview** tab merges all runs
+(the latest result of each check, with one verdict for the rig). Each run has its own tab, split into
+Summary · Checks · Inventory · GPU driver · Install plan · Raw JSON.
+
+Each run also writes its own files to `./hwb-runs/<UTC time>-<host>-<command>/`:
 
 | file | contents |
 |---|---|
 | `report.md` | readable summary table: paste it into a ticket |
 | `report.json` | machine-readable results and the full inventory |
 | `hwb.log.jsonl` | audit log: every command hwb executed, with exit code, duration and output |
+
+To share the results, run `hwb submit`. It uploads to the public [hwb gateway](gateway/README.md) (a Cloudflare Worker in this repo; no account needed). It removes host names, addresses, serials and paths, shows what will be sent, asks for confirmation, then prints a link and a QR code. Interactive runs offer this at the end; `HWB_GATEWAY=off` disables it.
 
 ## Documentation
 

@@ -7,6 +7,20 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+  - package-ecosystem: npm
+    directory: /ui
+    schedule:
+      interval: monthly
+    groups:
+      report-ui:
+        patterns: ["*"]
+  - package-ecosystem: npm
+    directory: /gateway
+    schedule:
+      interval: monthly
+    groups:
+      gateway:
+        patterns: ["*"]
   - package-ecosystem: uv
     directory: /
     schedule:

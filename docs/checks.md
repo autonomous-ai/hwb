@@ -11,7 +11,7 @@
 | `gpu.secure_boot` | Secure Boot state. It only matters if it blocks the module | **WARN** (Secure Boot on and module not loaded): enroll the DKMS MOK key (`sudo mokutil --import /var/lib/dkms/mok.pub`, then reboot and confirm in the MOK manager) or disable Secure Boot. Ubuntu's signed packages avoid this |
 | `gpu.kernel_headers` | `/lib/modules/$(uname -r)/build` exists | **WARN:** DKMS can't rebuild the driver after a kernel upgrade. Install `linux-headers-$(uname -r)` (Debian/Ubuntu) or `linux-headers` / `linux-lts-headers` (Arch) |
 | `gpu.nvidia_smi` | `nvidia-smi` runs and sees every GPU the host owns (PCI GPUs minus those passed through to VMs) | **FAIL** (fails to run): the userspace driver is missing or doesn't match the kernel module, usually because the server hasn't been rebooted since the upgrade. **FAIL** (count mismatch): a GPU failed to initialize. Check `dmesg` for *"fallen off the bus"* / Xid 79, then check power, risers and seating |
-| `gpu.blackwell` | For compute capability ≥ 10 (RTX 50xx, B-series): the open kernel module **and** driver ≥ 570 | **FAIL:** install an `-open` driver package from branch 570 or newer. SKIP when there are no Blackwell GPUs |
+| `gpu.blackwell` | For compute capability ≥ 10 (RTX 50xx, RTX PRO 6000 Blackwell, B-series): the open kernel module **and** driver ≥ 570 | **FAIL:** install an `-open` driver package from branch 570 or newer. SKIP when there are no Blackwell GPUs |
 | `gpu.pcie_link` | Each GPU's current PCIe link **width** equals its maximum | **WARN:** the card is running at x8, x4 or x1. Usual causes: bad riser, wrong slot, BIOS bifurcation setting, dirty contacts. Link *generation* drops at idle, which is normal, so it isn't checked |
 | `gpu.persistence` | Persistence mode is on (avoids driver re-initialization delays and first-call latency) | **WARN:** `sudo systemctl enable --now nvidia-persistenced` (or `sudo nvidia-smi -pm 1`, which doesn't survive a reboot) |
 | `gpu.libcuda` | `libcuda.so.1` is in the linker cache. PyTorch, vLLM and every CUDA app need it | **FAIL:** reinstall the driver package. Run `sudo ldconfig` |
@@ -51,3 +51,11 @@ PASS   gpu.xid            no Xid events this boot
 
 - **RTX A6000** (Ampere, sm_86, 48 GB GDDR6 with ECC, blower cooler, 300 W). Works with either module flavor. ECC state shows up in the inventory.
 - **RTX 5090** (Blackwell, sm_120, 32 GB GDDR7, up to 575 W). Requires the open modules, driver ≥ 570, CUDA ≥ 12.8, and PyTorch/vLLM wheels built for cu128 or newer. Check the PSU headroom and the 12V-2x6 connectors before burn-in.
+- **RTX PRO 6000 Blackwell** (sm_120, 96 GB GDDR7 with ECC, **PCIe Gen5 x16**). Same driver/CUDA requirements as the RTX 5090. Comes in three editions:
+  - **Workstation Edition**, 600 W, flow-through cooler. Two stacked cards breathe each other's exhaust, so watch the upper card in `bench thermal` or `monitor`. Seat the 12V-2x6 connectors fully.
+  - **Max-Q**, 300 W, blower cooler.
+  - **Server Edition**, passive. It needs chassis airflow.
+
+  Its healthy busy link is **Gen5**: a drop to Gen4 under load is already a downgrade.
+
+**"A6000" is ambiguous.** "RTX A6000" (Ampere, 48 GB, Gen4) and "RTX PRO 6000 Blackwell" (96 GB, Gen5) are often both called "A6000". Check the GPU name and compute capability in the hwb report (or `nvidia-smi --query-gpu=name,compute_cap --format=csv`) before reasoning about expected PCIe generation, memory budget or which model builds will run. hwb itself always compares a link with *its own* maximum, so its PCIe findings are right for either card.

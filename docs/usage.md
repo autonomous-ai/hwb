@@ -93,7 +93,7 @@ hwb install {driver,cuda,tools} [--apply] [-y] [--branch N] [--cuda-version X.Y]
 Steps run in order and **stop at the first failure**. The failing step's stderr is shown in the result, and the full output is in `hwb.log.jsonl`. After `install driver --apply`, reboot and run `hwb` again.
 
 Notes:
-- All drivers use the **open kernel modules**. RTX 50xx (Blackwell) requires them, and NVIDIA recommends them for Ampere (A6000) as well.
+- All drivers use the **open kernel modules**. Blackwell (RTX 50xx, RTX PRO 6000 Blackwell) requires them, and NVIDIA recommends them for Ampere (RTX A6000) as well.
 - The CUDA toolkit (`nvcc`) is **optional**. PyTorch and vLLM wheels bundle their own CUDA runtime and only need the driver.
 - On Debian with Secure Boot on, enroll the DKMS MOK key (`mokutil --import`) or disable Secure Boot.
 - Omarchy usually installs the NVIDIA driver during OS setup. Run `hwb` before installing anything.
@@ -141,7 +141,7 @@ hwb monitor [--duration SECONDS] [--interval SECONDS]
 
 Records the same time series as the benchmarks (CPU and GPU temperature, utilisation, clocks, power, GPU PCIe links) for `--duration` seconds (default 600) **without adding any load**, while the machine runs its own workload. It applies the same temperature-limit, throttling, GPU-slowdown and PCIe judgements. Ctrl-C stops early and keeps what was recorded.
 
-Use it for problems that only show under real jobs after a while. Example: a customer reports GPUs dropping from Gen4 to Gen3 after some time. Run `sudo hwb monitor --duration 3600` during their workload. If a busy GPU's link drops a generation while its error count rises and temperatures climb, that's a marginal PCIe channel (riser, retimer, slot, contacts) losing margin as the chassis warms. CPU throttling itself doesn't change link speed.
+Use it for problems that only show under real jobs after a while. Example: a customer reports GPUs dropping a PCIe generation after some time (Gen5 → Gen4 on Blackwell cards, Gen4 → Gen3 on Ampere/Ada). Run `sudo hwb monitor --duration 3600` during their workload. If a busy GPU's link drops a generation while its error count rises and temperatures climb, that's a marginal PCIe channel (riser, retimer, slot, contacts) losing margin as the chassis warms. CPU throttling itself doesn't change link speed.
 
 ### `serve` 🚧
 

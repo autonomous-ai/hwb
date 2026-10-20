@@ -3,7 +3,7 @@
 [![CI](https://github.com/autonomous-ai/hwb/actions/workflows/ci.yml/badge.svg)](https://github.com/autonomous-ai/hwb/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/autonomous-ai/hwb)](https://github.com/autonomous-ai/hwb/releases)
 
-Run hwb on a freshly racked NVIDIA GPU server (Xeon or Threadripper/EPYC with 2× RTX A6000, RTX 4090/5090 or similar, on Ubuntu, Debian or Omarchy). It answers three questions:
+Run hwb on a freshly racked NVIDIA GPU server (Xeon or Threadripper/EPYC with RTX A6000, RTX PRO 6000 Blackwell, RTX 4090/5090 or similar, on Ubuntu, Debian or Omarchy). It answers three questions:
 
 1. **Is the GPU driver stack healthy, and what hardware is in the box?** (`hwb`)
 2. **Does it perform and stay cool under sustained load?** (`hwb bench cpu`, `hwb bench thermal`)

@@ -148,3 +148,12 @@ def test_pure_vm_host_skips_host_driver_checks() -> None:
     assert results["check_kernel_module"].name == "gpu.kernel_module"
     assert results["check_pci"].status is results["check_bound"].status is Status.PASS
     assert all(r.status is not Status.FAIL for r in results.values())
+
+
+def test_rtx_pro_6000_blackwell_is_held_to_the_blackwell_rules() -> None:
+    # The card in a "2x A6000" report that is really an RTX PRO 6000 Blackwell (compute 12.0).
+    rows = [_row(name="NVIDIA RTX PRO 6000 Blackwell Workstation Edition", compute_cap="12.0")]
+    ok = GpuFacts(smi_rows=rows, kernel_driver=KernelDriver("580.65.06", True))
+    assert check_blackwell(ok).status is Status.PASS
+    proprietary = GpuFacts(smi_rows=rows, kernel_driver=KernelDriver("580.65.06", False))
+    assert check_blackwell(proprietary).status is Status.FAIL

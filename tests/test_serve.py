@@ -299,3 +299,24 @@ def test_dry_run_and_no_preset(tmp_path: Path, capsys: pytest.CaptureFixture[str
     assert cli.main(["--out", str(out), "serve"]) == 0  # no matching hardware on the test machine
     (r,) = _report(out)["results"]
     assert r["status"] == "skip" and "--endpoint" in r["hint"]
+
+
+def test_running_models_are_recognised_by_their_served_name() -> None:
+    assert presets.match_model("DeepSeek-V4-Flash-Vision-Exp").name == "deepseek-v4-flash-vision"  # type: ignore[union-attr]
+    assert (
+        presets.match_model("deepseek-ai/DeepSeek-V4-Flash-Vision-Exp").name
+        == "deepseek-v4-flash-vision"
+    )  # type: ignore[union-attr]
+    assert presets.match_model("glm-4.7-flash").name == "glm-4.7-flash"  # type: ignore[union-attr]
+    assert presets.match_model("some-finetune") is None
+
+
+def test_reasoning_that_eats_the_answer_budget_is_explained(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    thinking_only = client.Reply(
+        ok=True, reasoning="Let me think step by step about 17 times 23", completion_tokens=32
+    )
+    monkeypatch.setattr(suite, "chat", lambda *a, **k: thinking_only)
+    (first, *_) = suite.run_checks("http://x", "m", no_thinking=suite.NO_THINKING_ANY, tools=False)
+    assert first["status"] == "fail" and "budget went to reasoning" in first["detail"]

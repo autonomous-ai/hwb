@@ -20,6 +20,9 @@ from typing import Any
 from .client import Reply, chat, percentile
 
 NEEDLE = "4817"
+# Unknown model: the switches the common chat templates use (Qwen/GLM: enable_thinking,
+# DeepSeek: thinking). Templates ignore keys they don't use.
+NO_THINKING_ANY: dict[str, Any] = {"enable_thinking": False, "thinking": False}
 _FILLER = (
     "The archive room held ledgers from the harbour office: shipping manifests, tide tables, "
     "repair invoices for the north pier and letters about the price of rope. "
@@ -148,6 +151,11 @@ def run_checks(
             **extra,
         )
         ok, detail = c.verify(r) if r.ok else (False, r.error or "request failed")
+        if not ok and r.ok and not r.text.strip() and not r.tool_calls and r.reasoning:
+            detail = (
+                f"no answer: the {c.max_tokens}-token budget went to reasoning; the server did not "
+                "accept the switch to turn reasoning off (pass --preset for this model)"
+            )
         out.append(
             {
                 "name": c.name,

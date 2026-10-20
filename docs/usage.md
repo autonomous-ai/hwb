@@ -151,7 +151,7 @@ Use it for problems that only show under real jobs after a while. Example: a cus
 
 ```
 hwb serve --list
-hwb serve [--preset NAME] [--dry-run] [--install-vllm | --vllm PATH] [--force]
+hwb serve [--preset NAME | --model HF_ID_OR_DIR] [--dry-run] [--install-vllm | --vllm PATH] [--force]
 hwb serve --endpoint http://host:8000 [--model NAME] [--preset NAME]
           [--concurrency 1,4,16] [--requests 4] [--max-tokens 256] [--ready-timeout 3600]
 ```
@@ -177,7 +177,8 @@ Hosts a real model with vLLM, or tests one that's already running, and measures 
 - Otherwise hwb first looks for a model server already running on the GPUs (see `info`). If it finds one and no `--preset` was given, **it tests that one rather than launching another**.
 - To launch, it picks the preset for the detected hardware, or the one named with `--preset`. It starts `vllm serve` in its own process group on `127.0.0.1`, waits for `/health` (`--ready-timeout`), tests it, and **always stops it** afterwards.
 - If other processes hold some GPUs, it launches on the free ones (`CUDA_VISIBLE_DEVICES`, numbered as in `nvidia-smi`). It refuses only when too few GPUs are free.
-- `--dry-run` prints the exact command and stops.
+- `--dry-run` prints the exact command and where the weights come from, then stops.
+- **Model weights:** hwb finds weights already on the machine (Hugging Face caches including other users', ModelScope, plain directories, plus Ollama and LM Studio as GGUF). With no `--preset`, it prefers a preset that's already on disk. `--model` launches any model found here without a preset. New downloads go to the shared Hugging Face cache (`HF_HOME`), after a free-space check. Details: [Serving and testing a model](serve.md#model-weights-reuse-whats-on-disk-share-whats-downloaded).
 
 **vLLM** comes from `--vllm PATH`, then `$HWB_HOME/venvs/vllm`, then `PATH`. `--install-vllm` creates that venv with uv (the pinned version, plus extras such as `b12x` for Blackwell kernels). Nothing is installed into the system or core Python. Hugging Face downloads use `HF_TOKEN` if it's set; the presets' models are public, so it's optional. `HWB_LLM_API_KEY` is sent as a Bearer token to servers that require one.
 

@@ -36,6 +36,8 @@ gateway/               Cloudflare Worker (JS): R2 report store, D1 analysis tabl
   bench/               cpu + thermal (load.py: stress-ng or stdlib workers; analysis.py: pure judging); memory/disk/gpu pending
   serve/               presets.py (vLLM launch presets per hardware, data only), suite.py (answer checks + load sweep),
                        client.py (stdlib streaming OpenAI client with timings), __init__.py (launch/endpoint, teardown)
+                       weights.py (weights on disk: HF caches incl. other users', ModelScope, dirs, Ollama/LM Studio;
+                       completeness; downloads only into the shared HF cache, never a private store)
   metrics/workloads.py what already runs on the GPUs (process -> server walk; never stores command lines)
 ```
 

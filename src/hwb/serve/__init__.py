@@ -25,15 +25,17 @@ from .. import nvsmi
 from ..core import proc
 from ..core.context import RunContext
 from ..core.errors import HwbError
+from ..core.platform import is_root
 from ..core.result import CheckResult, Status
 from ..metrics import workloads
 from ..metrics.sampler import Sampler
-from . import client, presets, suite
+from . import client, presets, suite, weights
 
 log = logging.getLogger(__name__)
 
 ENV_API_KEY = "HWB_LLM_API_KEY"
 READY_POLL_S = 5.0
+WEIGHTS_SHARE = 0.85  # auto launch: weights may use this share of the GPUs' memory
 LOG_TAIL = 3000
 _LOCAL = {"localhost", "127.0.0.1", "::1"}
 
@@ -245,21 +247,30 @@ def run(ctx: RunContext, opts: ServeOptions) -> None:
         return
     gpus = detected_gpus()
     hw = presets.matching_hardware(gpus)
-    preset = (
-        presets.by_name(opts.preset)
-        if opts.preset
-        else next((p for p in presets.for_hardware(hw) if p.default), None)
-    )
     section["hardware"] = hw.id if hw else None
+    found = weights.find_all()
+    section["weights_on_disk"] = [w.to_dict() for w in found]
+    busy = workloads.busy_gpus(running)
+    free = [str(i) for i in range(len(gpus)) if str(i) not in busy]
+
+    if opts.model:  # any model on this machine, without a preset
+        preset, needed, why = _auto_preset(opts.model, found, gpus, free)
+    else:
+        preset, why = _choose_preset(opts.preset, hw, found)
+        needed = presets.HARDWARE[preset.hardware].gpus if preset else 0
     if preset is None:
-        ctx.add(CheckResult(
-            "serve.vllm", Status.SKIP,
-            f"no preset {'named ' + repr(opts.preset) if opts.preset else 'for these GPUs'}",
-            hint="hwb serve --list shows the presets; --endpoint URL tests a server you already run",
-        ))  # fmt: skip
+        ctx.add(CheckResult("serve.vllm", Status.SKIP, why,
+                            hint="hwb serve --list shows presets and the models on this machine; "
+                            "--endpoint URL tests a server you already run"))  # fmt: skip
         return
+    if why:
+        log.info("%s", why)
     section["preset"] = preset.to_dict()
-    if preset.hardware != (hw.id if hw else None) and not opts.force:
+    if (
+        preset.hardware in presets.HARDWARE
+        and preset.hardware != (hw.id if hw else None)
+        and not opts.force
+    ):
         want = presets.HARDWARE[preset.hardware].label
         have = ", ".join(sorted({g.name for g in gpus})) or "no NVIDIA GPUs"
         ctx.add(CheckResult(
@@ -270,9 +281,6 @@ def run(ctx: RunContext, opts: ServeOptions) -> None:
 
     # Other workloads on some GPUs: launch on the free ones (same numbering as nvidia-smi),
     # refuse only when too few are left.
-    busy = workloads.busy_gpus(running)
-    needed = presets.HARDWARE[preset.hardware].gpus
-    free = [str(i) for i in range(len(gpus)) if str(i) not in busy]
     env: dict[str, str] = {}
     if busy:
         if len(free) < needed and not opts.force:
@@ -282,17 +290,14 @@ def run(ctx: RunContext, opts: ServeOptions) -> None:
                 if local
                 else "stop that workload first, or --force to launch anyway (it will likely run out of memory)"
             )
-            ctx.add(
-                CheckResult(
-                    "serve.vllm",
-                    Status.SKIP,
-                    f"{preset.name} needs {needed} free GPUs; in use: {held} ({workloads.summarize(running)})",
-                    hint=hint,
-                )
-            )
+            ctx.add(CheckResult(
+                "serve.vllm", Status.SKIP,
+                f"{preset.name} needs {needed} free GPUs; in use: {held} ({workloads.summarize(running)})",
+                hint=hint,
+            ))  # fmt: skip
             return
         if len(free) >= needed:
-            env = {
+            env |= {
                 "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
                 "CUDA_VISIBLE_DEVICES": ",".join(free[:needed]),
             }
@@ -303,15 +308,29 @@ def run(ctx: RunContext, opts: ServeOptions) -> None:
                 ",".join(free[:needed]),
             )
 
+    model_arg, weights_env, plan, problem = _weights_plan(preset, found, force=opts.force)
+    section["weights"] = plan
+    if problem:
+        ctx.add(CheckResult("serve.vllm", Status.SKIP, problem[0], hint=problem[1]))
+        return
+    env |= weights_env
+
     vllm = find_vllm(opts.vllm)
     if vllm is None and opts.install_vllm and not opts.dry_run:
         vllm = install_vllm(preset)
-    argv = preset.command(host="127.0.0.1", port=opts.port, vllm=vllm or "vllm")
+    argv = preset.command(host="127.0.0.1", port=opts.port, vllm=vllm or "vllm", model=model_arg)
     section["command"] = argv
     shown = " ".join(f"{k}={v}" for k, v in env.items())
+    print(f"weights: {plan['note']}")
     print("vllm command:\n  " + (shown + " " if shown else "") + " ".join(argv))
     if opts.dry_run:
-        ctx.add(CheckResult("serve.vllm", Status.SKIP, f"dry run: {preset.name} ({preset.status})"))
+        ctx.add(
+            CheckResult(
+                "serve.vllm",
+                Status.SKIP,
+                f"dry run: {preset.name} ({preset.status}); {plan['note']}",
+            )
+        )
         return
     if vllm is None:
         ctx.add(CheckResult(
@@ -326,7 +345,149 @@ def run(ctx: RunContext, opts: ServeOptions) -> None:
         ready_s = wait_ready(base, child, log_path, opts.ready_timeout_s)
         section |= {"model": preset.name, "endpoint": base, "ready_s": round(ready_s, 1)}
         ctx.add(CheckResult(
-            "serve.vllm", Status.PASS, f"{preset.name} ({preset.model}) ready in {ready_s:.0f}s",
-            data={"preset": preset.to_dict()},
+            "serve.vllm", Status.PASS, f"{preset.name} ({preset.model}) ready in {ready_s:.0f}s; {plan['note']}",
+            data={"preset": preset.to_dict(), "weights": plan},
         ))  # fmt: skip
         _test(ctx, base, preset.name, preset, opts, section, sample=True)
+
+
+def _choose_preset(
+    name: str | None, hw: presets.Hardware | None, found: list[weights.Weights]
+) -> tuple[presets.Preset | None, str]:
+    """The named preset; otherwise, for this hardware, one whose weights are already on disk
+    (default first, then verified), else the default (which downloads)."""
+    if name:
+        p = presets.by_name(name)
+        return p, "" if p else f"no preset named {name!r}"
+    candidates = presets.for_hardware(hw)
+    if not candidates:
+        return None, "no preset for these GPUs"
+    on_disk = [p for p in candidates if weights.find(found, p.model, p.revision)]
+    ranked = sorted(on_disk, key=lambda p: (not p.default, p.status != presets.VERIFIED))
+    if ranked:
+        return ranked[0], f"using {ranked[0].name}: its weights are already on this machine"
+    default = next(p for p in candidates if p.default)
+    return (
+        default,
+        f"no preset's weights are on this machine yet; {default.name} will be downloaded",
+    )
+
+
+def _auto_preset(
+    model: str, found: list[weights.Weights], gpus: list[presets.Gpu], free: list[str]
+) -> tuple[presets.Preset | None, int, str]:
+    """A preset for a model on this machine (HF id in a cache, or a directory) that has none:
+    as few GPUs as fit its weights, safe default flags, no tool parser assumed."""
+    path = Path(model).expanduser().resolve()
+    if path.is_dir():
+        complete, fmt, size = weights.snapshot_state(path)
+        hit: weights.Weights | None = weights.Weights(path.name, "local", path, size, fmt, complete)
+    else:
+        hit = weights.find(found, model) or next(
+            (w for w in found if w.id.lower() == model.lower()), None
+        )
+    if hit is None:
+        return None, 0, (f"{model} is not on this machine: fetch it into the shared cache with "
+                         f"`hf download {model}`, or pick a preset")  # fmt: skip
+    if not hit.vllm_runnable:
+        what = "incomplete download" if not hit.complete else f"{hit.format} weights"
+        return (
+            None,
+            0,
+            f"{model}: {what}, not runnable by vLLM (GGUF/Ollama: test its own server with --endpoint)",
+        )
+    mem = min((g.mem_gib for i, g in enumerate(gpus) if str(i) in free), default=0) * 1.0737
+    if mem <= 0:
+        return None, 0, "no free NVIDIA GPU"
+    # Weights within 85 % of the chosen GPUs' memory, the rest for KV cache and CUDA graphs
+    # (the verified DeepSeek preset runs 168 GB on 2 x 96 GB this way).
+    tp = 1
+    while hit.size_gb > tp * mem * WEIGHTS_SHARE and tp < 64:
+        tp *= 2  # vLLM splits attention heads evenly: powers of two
+    if tp > len(free):
+        return (
+            None,
+            0,
+            f"{model} ({hit.size_gb:.0f} GB) needs {tp} free GPUs of {mem:.0f} GB; {len(free)} free",
+        )
+    preset = presets.Preset(
+        name=hit.id.rsplit("/", 1)[-1],
+        family="auto",
+        hardware="this machine",
+        model=str(hit.path) if hit.source != "huggingface" else hit.id,
+        revision=hit.revision if hit.source == "huggingface" else None,
+        weights_gb=round(hit.size_gb, 1),
+        quant="as stored",
+        context=0,
+        status="auto",
+        tools=False,
+        no_thinking=suite.NO_THINKING_ANY,
+        args=(
+            "--tensor-parallel-size", str(tp), "--gpu-memory-utilization", "0.92",
+            "--enable-prefix-caching", "--enable-chunked-prefill",
+        ),
+    )  # fmt: skip
+    return preset, tp, f"{model}: no preset, launching on {tp} GPU(s) with default flags"
+
+
+def _weights_plan(
+    preset: presets.Preset, found: list[weights.Weights], *, force: bool
+) -> tuple[str | None, dict[str, str], dict[str, Any], tuple[str, str] | None]:
+    """(model argument, env, report entry, problem): reuse a copy on disk where possible
+    (pointing vLLM at whichever cache holds it), else download into the shared HF cache."""
+    if Path(preset.model).is_absolute():  # an ad-hoc preset for a local directory
+        return (
+            preset.model,
+            {},
+            {"cached": True, "source": "local", "note": "local directory"},
+            None,
+        )
+    hit = weights.find(found, preset.model, preset.revision)
+    if hit and hit.source == "huggingface":
+        env = {"HF_HUB_CACHE": str(hit.hub)} if hit.hub and hit.hub != weights.default_hub() else {}
+        where = "another Hugging Face cache on this machine" if env else "the Hugging Face cache"
+        if weights.has_tokenizer(hit.path):
+            # Everything vLLM loads is on disk: no Hub lookups, no lock files in someone's cache.
+            env["HF_HUB_OFFLINE"] = "1"
+        plan = {"cached": True, "source": hit.source, "offline": "HF_HUB_OFFLINE" in env,
+                "note": f"already in {where}, no download"}  # fmt: skip
+        return None, env, plan, None
+    if hit:  # ModelScope / plain directory copy of the same model
+        return (
+            str(hit.path),
+            {},
+            {
+                "cached": True,
+                "source": hit.source,
+                "note": f"{hit.source} copy on disk, no download",
+            },
+            None,
+        )
+    other = weights.find(found, preset.model)
+    target = weights.default_hub()
+    need = preset.weights_gb * (0.2 if other else 1.05)
+    free = weights.free_gb(target)
+    note = ("other revision cached: only changed files download" if other
+            else f"downloads ~{preset.weights_gb:.0f} GB into the shared Hugging Face cache")  # fmt: skip
+    plan = {
+        "cached": False,
+        "source": "huggingface",
+        "note": note,
+        "free_gb": round(free),
+        "need_gb": round(need),
+    }
+    if free < need and not force:
+        return (
+            None,
+            {},
+            plan,
+            (
+                f"not enough disk for {preset.name}: {free:.0f} GB free in the Hugging Face cache, ~{need:.0f} GB needed",
+                "point HF_HOME at a bigger disk (vLLM, transformers and `hf` all follow it), or --force",
+            ),
+        )
+    if is_root() and os.environ.get("SUDO_USER"):
+        log.warning("running as root: the download goes to root's Hugging Face cache, not %s's. "
+                    "Run hwb serve without sudo (it needs no root) to share one cache.",
+                    os.environ["SUDO_USER"])  # fmt: skip
+    return None, {}, plan, None

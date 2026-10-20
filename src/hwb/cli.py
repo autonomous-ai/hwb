@@ -69,6 +69,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="sampling interval (s)",
     )
 
+    m = sub.add_parser(
+        "monitor",
+        help="record temperatures, clocks, power and PCIe links while the machine runs its own workload",
+        description="Record the benchmark time series (CPU/GPU temperature, clocks, power, GPU "
+        "PCIe link generation/width and error counters) without adding load. Flags thermal "
+        "limits, throttling and PCIe links dropping below their max while busy. Ctrl-C stops "
+        "early and keeps what was recorded.",
+    )
+    m.add_argument("--duration", type=int, default=600, help="seconds to record (default 600)")
+    m.add_argument(
+        "--interval",
+        type=float,
+        default=bench.BenchOptions().interval_s,
+        help="sampling interval (s)",
+    )
+
     s = sub.add_parser("serve", help="host a real model with vLLM and load-test it")
     s.add_argument("--model", default=serve.DEFAULT_MODEL)
     s.add_argument("--tp", type=int, help="tensor parallel size (default: all GPUs)")
@@ -132,6 +148,10 @@ def _cmd_bench(ctx: RunContext, args: argparse.Namespace) -> None:
     bench.run(ctx, args.kind, opts)
 
 
+def _cmd_monitor(ctx: RunContext, args: argparse.Namespace) -> None:
+    bench.monitor.run(ctx, bench.BenchOptions(duration_s=args.duration, interval_s=args.interval))
+
+
 def _cmd_serve(ctx: RunContext, args: argparse.Namespace) -> None:
     serve.run(ctx, serve.ServeOptions(model=args.model, tensor_parallel=args.tp, port=args.port))
 
@@ -147,6 +167,7 @@ COMMANDS: dict[str, Callable[[RunContext, argparse.Namespace], None]] = {
     "info": _cmd_info,
     "install": _cmd_install,
     "bench": _cmd_bench,
+    "monitor": _cmd_monitor,
     "serve": _cmd_serve,
     "all": _cmd_all,
 }

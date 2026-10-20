@@ -322,3 +322,51 @@ describe("chart scales", () => {
     expect(w.lo).toBe(0); // small non-negative values start at zero
   });
 });
+
+describe("PCIe link monitoring", () => {
+  const t = [0, 1, 2, 3, 4, 5];
+  const monitor: Report = {
+    ...HEALTHY,
+    command: "monitor",
+    results: [{ name: "bench.monitor", status: "warn", summary: "GPU1 PCIe link at Gen3 (max Gen4) while busy", hint: "reseat", data: {} }],
+    sections: {
+      bench: {
+        monitor: {
+          seconds: 6,
+          cpu_util_pct: 41,
+          findings: [{ level: "warn", text: "GPU1 PCIe link at Gen3 (max Gen4) while busy, in 3 of 6 busy samples", hint: "reseat" }],
+          pcie: {
+            "1": { addr: "0000:41:00.0", upstream: "0000:40:01.1", max_gen: 4, max_width: 16, min_width: 8, correctable_errors: 12, uncorrectable_errors: 0, replays: null },
+          },
+          timeseries: {
+            t,
+            interval_s: 1,
+            phases: [{ name: "monitor", start: 0, end: 5 }],
+            series: [
+              { key: "gpu1.util", label: "GPU1 utilization", group: "utilization", unit: "%", values: [99, 99, 99, 99, 99, 99] },
+              { key: "gpu1.pcie_gen", label: "GPU1 PCIe generation", group: "pcie", unit: "gen", values: [4, 4, 4, 3, 3, 3] },
+              { key: "gpu1.pcie_errors", label: "GPU1 correctable PCIe errors", group: "errors", unit: "errors", values: [0, 0, 0, 5, 9, 12] },
+            ],
+          },
+        },
+      },
+    },
+  };
+
+  it("charts the link generation as steps and lists each GPU link", async () => {
+    const user = userEvent.setup();
+    render(<App bundle={normalize(monitor)} />);
+    await user.click(tab("Report sections", "Benchmarks"));
+    const panel = activePanel();
+    expect(within(panel).getByRole("heading", { name: "Monitor" })).toBeTruthy();
+    const gen = Array.from(panel.querySelectorAll("figure.chart")).find(
+      (f) => f.querySelector(".chart-title")?.textContent === "GPU PCIe link generation",
+    )!;
+    expect(Array.from(gen.querySelectorAll(".tick")).map((x) => x.textContent)).toContain("Gen4");
+    expect(gen.querySelector("path.line")!.getAttribute("d")).toContain("H"); // stepped
+    const row = panel.querySelector("table.pcie-table tbody tr")!;
+    expect(row.textContent).toContain("0000:41:00.0");
+    expect(row.querySelector("td.bad")?.textContent).toBe("x8");
+    expect(within(panel).getByText(/added no load/)).toBeTruthy();
+  });
+});

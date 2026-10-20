@@ -29,6 +29,7 @@ from typing import Any
 from ..core import proc
 from ..core.errors import HwbError
 from ..core.log import fields
+from .pcie import PcieWatch, gpu_addresses
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +51,15 @@ GPU_FIELDS = (
     "power.draw",
     "clocks.sm",
     "memory.used",
+    "pcie.link.gen.current",
+    "pcie.link.width.current",
+    "clocks_throttle_reasons.active",
+)
+# Fields older drivers may not know; a bad field makes nvidia-smi reject the whole query,
+# so they are probed once and dropped if unsupported.
+OPTIONAL_GPU_FIELDS = (
+    "pcie.link.gen.current",
+    "pcie.link.width.current",
     "clocks_throttle_reasons.active",
 )
 # clocks_throttle_reasons bits that mean the GPU slowed itself down.
@@ -64,6 +74,8 @@ GROUPS: dict[str, tuple[str, Callable[[list[float]], float]]] = {
     "clock": ("MHz", lambda v: sum(v) / len(v)),
     "power": ("W", lambda v: sum(v) / len(v)),
     "load": ("", lambda v: sum(v) / len(v)),
+    "pcie": ("gen", min),  # keep link drops visible after downsampling
+    "errors": ("errors", max),  # cumulative counts
 }
 
 
@@ -205,18 +217,32 @@ def load1(root: Path) -> float | None:
     return _num(text.split()[0]) if text else None
 
 
-def parse_gpu_csv(text: str, wall0: float) -> list[dict[str, Any]]:
-    """Rows of ``nvidia-smi --query-gpu=GPU_FIELDS -lms`` output; malformed lines skipped."""
+def usable_gpu_fields() -> tuple[str, ...]:
+    """GPU_FIELDS minus optional fields this driver's nvidia-smi rejects."""
+
+    def ok(fields: tuple[str, ...]) -> bool:
+        argv = ["nvidia-smi", f"--query-gpu={','.join(fields)}", "--format=csv,noheader", "-i", "0"]
+        return proc.run(argv, timeout=30).ok
+
+    if ok(GPU_FIELDS):
+        return GPU_FIELDS
+    return tuple(f for f in GPU_FIELDS if f not in OPTIONAL_GPU_FIELDS or ok((f,)))
+
+
+def parse_gpu_csv(
+    text: str, wall0: float, fieldnames: tuple[str, ...] = GPU_FIELDS
+) -> list[dict[str, Any]]:
+    """Rows of ``nvidia-smi --query-gpu=<fieldnames> -lms`` output; malformed lines skipped."""
     rows = []
     for raw in csv.reader(io.StringIO(text), skipinitialspace=True):
-        if len(raw) != len(GPU_FIELDS):
+        if len(raw) != len(fieldnames):
             continue
-        r = dict(zip(GPU_FIELDS, (c.strip() for c in raw), strict=True))
+        r = dict(zip(fieldnames, (c.strip() for c in raw), strict=True))
         try:
             ts = datetime.strptime(r["timestamp"], _GPU_TS).timestamp()
         except ValueError:
             continue
-        reasons = r["clocks_throttle_reasons.active"]
+        reasons = r.get("clocks_throttle_reasons.active", "")
         try:
             bits = int(reasons, 16) if reasons.startswith("0x") else None
         except ValueError:
@@ -230,6 +256,8 @@ def parse_gpu_csv(text: str, wall0: float) -> list[dict[str, Any]]:
                 "power": _num(r["power.draw"]),
                 "sm_mhz": _num(r["clocks.sm"]),
                 "mem_mib": _num(r["memory.used"]),
+                "pcie_gen": _num(r.get("pcie.link.gen.current")),
+                "pcie_width": _num(r.get("pcie.link.width.current")),
                 "reasons": bits,
             }
         )
@@ -322,6 +350,8 @@ class Sampler:
         self._t0 = 0.0
         self._wall0 = 0.0
         self._phase: dict[str, Any] | None = None
+        self._pcie: PcieWatch | None = None
+        self._gpu_fields: tuple[str, ...] = GPU_FIELDS
 
     # -- phases
     def now(self) -> float:
@@ -351,11 +381,17 @@ class Sampler:
         self._gpu_csv = self.out_dir / f"{self.name}-gpu.csv"
         if self.gpus and proc.have("nvidia-smi"):
             try:
+                self._pcie = PcieWatch(self.root, gpu_addresses())
+                self._pcie.start()
+            except (HwbError, OSError) as exc:
+                log.warning("PCIe link monitoring unavailable: %s", exc)
+            try:
+                self._gpu_fields = usable_gpu_fields()
                 self._exit.enter_context(
                     proc.spawn(
                         [
                             "nvidia-smi",
-                            f"--query-gpu={','.join(GPU_FIELDS)}",
+                            f"--query-gpu={','.join(self._gpu_fields)}",
                             "--format=csv,noheader,nounits",
                             f"-lms={max(int(self.interval * 1000), 100)}",
                         ],
@@ -395,6 +431,7 @@ class Sampler:
             "load1": load1(root),
             "throttle": throttle_events(root),
             "temps": {s.label: read_temp(s) for s in self._sensors},
+            "pcie": self._pcie.sample() if self._pcie else {},
         }
         state.update(cpu=cpu, energy=energy, time=now)
         return row
@@ -435,8 +472,26 @@ class Sampler:
             throttles[-1] - throttles[0] if len(throttles) > 1 else None
         )
 
+        if self._pcie:
+            for g in self._pcie.gpus:
+                put(
+                    f"gpu{g.index}.pcie_gen",
+                    f"GPU{g.index} PCIe generation",
+                    "pcie",
+                    (r["pcie"].get(g.index, {}).get("gen") for r in self._rows),
+                )
+                put(
+                    f"gpu{g.index}.pcie_errors",
+                    f"GPU{g.index} correctable PCIe errors",
+                    "errors",
+                    (r["pcie"].get(g.index, {}).get("errors") for r in self._rows),
+                )
+            ts.meta["pcie"] = self._pcie.finish()
+
         gpu_rows = (
-            parse_gpu_csv(_read(self._gpu_csv) or "", self._wall0) if self._gpu_csv.exists() else []
+            parse_gpu_csv(_read(self._gpu_csv) or "", self._wall0, self._gpu_fields)
+            if self._gpu_csv.exists()
+            else []
         )
         self._write_csv(ts)
         if gpu_rows:
@@ -463,6 +518,10 @@ class Sampler:
                 ("sm_mhz", "SM clock", "clock"),
             ):
                 ts.add(f"gpu{g}.{metric}", f"GPU{g} {label}", group)[i] = r[metric]
+            # nvidia-smi's view of the link fills in where sysfs had nothing.
+            gen = ts.add(f"gpu{g}.pcie_gen", f"GPU{g} PCIe generation", "pcie")
+            if gen[i] is None:
+                gen[i] = r["pcie_gen"]
             if r["reasons"] is not None:
                 slow[g] = slow.get(g, 0) + bool(r["reasons"] & GPU_SLOWDOWN)
                 capped[g] = capped.get(g, 0) + bool(r["reasons"] & GPU_POWER_CAP)
@@ -481,6 +540,13 @@ class Sampler:
             "throttle_count",
         ]
         cols += [f"temp_c[{s.label}]" for s in self._sensors]
+        pcie = self._pcie.gpus if self._pcie else []
+        for g in pcie:
+            cols += [
+                f"gpu{g.index}_pcie_gen",
+                f"gpu{g.index}_pcie_width",
+                f"gpu{g.index}_pcie_cor_errors",
+            ]
         path = self.out_dir / f"{self.name}.csv"
         with path.open("w", newline="", encoding="utf-8") as fh:
             w = csv.writer(fh)
@@ -495,5 +561,10 @@ class Sampler:
                     ]
                     + [r["throttle"]]
                     + [r["temps"].get(s.label) for s in self._sensors]
+                    + [
+                        r["pcie"].get(g.index, {}).get(k)
+                        for g in pcie
+                        for k in ("gen", "width", "errors")
+                    ]
                 )
         ts.meta["csv"] = [path.name] + ([self._gpu_csv.name] if self._gpu_csv.exists() else [])

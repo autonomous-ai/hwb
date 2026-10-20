@@ -14,6 +14,7 @@ CRIT_MARGIN_WARN_C = 10.0
 CLOCK_SAG_WARN_PCT = 10.0  # clocks lost between the start and end of sustained load
 STILL_RISING_C_PER_MIN = 1.0  # temperature still climbing at the end of the load phase
 EDGE_FRACTION = 0.2  # "start"/"end" of a phase = its first/last 20 %
+GPU_BUSY_PCT = 50.0  # a GPU this busy keeps its link at full speed; idle ones drop it on purpose
 
 
 def clean(values: list[float | None]) -> list[float]:
@@ -87,8 +88,12 @@ class Finding:
     hint: str | None = None
 
 
-def thermal_findings(ts: Timeseries, load_phase: str) -> tuple[list[Finding], dict[str, Any]]:
-    """What sustained load did to temperatures, clocks and GPUs."""
+def thermal_findings(
+    ts: Timeseries, load_phase: str, *, sustained_load: bool = True
+) -> tuple[list[Finding], dict[str, Any]]:
+    """What the phase did to temperatures, clocks, GPUs and PCIe links. Clock sag and
+    "still heating" only mean something under our own steady load (``sustained_load``);
+    under someone else's workload clocks and temperatures follow that workload."""
     findings: list[Finding] = []
     s = ts.phase_slice(load_phase)
     temp = cpu_temp(ts)
@@ -130,7 +135,7 @@ def thermal_findings(ts: Timeseries, load_phase: str) -> tuple[list[Finding], di
 
     first, last = edges(ts.values("cpu.mhz")[s])
     m_first, m_last = mean(first), mean(last)
-    if m_first and m_last:
+    if sustained_load and m_first and m_last:
         sag = 100 * (m_first - m_last) / m_first
         facts["cpu_clock_sag_pct"] = round(sag, 1)
         if sag >= CLOCK_SAG_WARN_PCT:
@@ -145,7 +150,7 @@ def thermal_findings(ts: Timeseries, load_phase: str) -> tuple[list[Finding], di
     _, tail = edges(load_temp)
     rise = slope_per_min(load_t[-len(tail) :], tail) if tail else None
     facts["cpu_temp_end_slope_c_per_min"] = None if rise is None else round(rise, 2)
-    if rise is not None and rise > STILL_RISING_C_PER_MIN:
+    if sustained_load and rise is not None and rise > STILL_RISING_C_PER_MIN:
         findings.append(
             Finding(
                 "note",
@@ -162,7 +167,76 @@ def thermal_findings(ts: Timeseries, load_phase: str) -> tuple[list[Finding], di
                     "check GPU airflow, fan speed and PCIe power cabling",
                 )
             )
+    findings += pcie_findings(ts)
+    facts["pcie"] = ts.meta.get("pcie") or None
     return findings, facts
+
+
+PCIE_HINT = (
+    "the link retrained to a lower speed or is taking errors: reseat the card and clean the "
+    "contacts, replace risers, check slot airflow (it often starts once the chassis is warm), "
+    "update the BIOS; forcing Gen3 in the BIOS is the stable fallback"
+)
+
+
+WIDTH_HINT = (
+    "x8 or narrower from the start usually means slot wiring, a riser or the BIOS bifurcation "
+    "setting; a link that narrows during the run is marginal: reseat, replace risers, check airflow"
+)
+
+
+def pcie_findings(ts: Timeseries) -> list[Finding]:
+    """Per GPU: link below its max generation while busy, narrower link, error counters."""
+    findings: list[Finding] = []
+    for gpu, m in (ts.meta.get("pcie") or {}).items():
+        gens = ts.values(f"gpu{gpu}.pcie_gen")
+        util = ts.values(f"gpu{gpu}.util")
+        max_gen = m.get("max_gen")
+        busy = [i for i, u in enumerate(util) if u is not None and u >= GPU_BUSY_PCT]
+        if max_gen and busy:
+            low = [g for i in busy if i < len(gens) and (g := gens[i]) is not None and g < max_gen]
+            if low:
+                findings.append(
+                    Finding(
+                        "warn",
+                        f"GPU{gpu} PCIe link at Gen{min(low):.0f} (max Gen{max_gen}) while busy, "
+                        f"in {len(low)} of {len(busy)} busy samples",
+                        PCIE_HINT,
+                    )
+                )
+        if m.get("max_width") and m.get("min_width") and m["min_width"] < m["max_width"]:
+            findings.append(
+                Finding(
+                    "warn",
+                    f"GPU{gpu} PCIe link narrowed to x{m['min_width']} (max x{m['max_width']})",
+                    WIDTH_HINT,
+                )
+            )
+        if m.get("uncorrectable_errors"):
+            findings.append(
+                Finding(
+                    "fail",
+                    f"{m['uncorrectable_errors']} uncorrectable PCIe errors on GPU{gpu}'s link",
+                    "the link is losing data: check dmesg for AER, reseat or move the card, replace risers",
+                )
+            )
+        if m.get("correctable_errors"):
+            findings.append(
+                Finding(
+                    "warn",
+                    f"{m['correctable_errors']} correctable PCIe errors on GPU{gpu}'s link",
+                    PCIE_HINT,
+                )
+            )
+        if m.get("replays"):
+            findings.append(
+                Finding(
+                    "warn",
+                    f"GPU{gpu} retransmitted {m['replays']} PCIe packets (replays)",
+                    PCIE_HINT,
+                )
+            )
+    return findings
 
 
 def verdict(findings: list[Finding]) -> str:

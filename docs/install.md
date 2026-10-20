@@ -19,7 +19,9 @@ Optional tools make some results richer. hwb works without them and marks the af
 | `dmidecode` (run as root) | per-DIMM memory details | `dmidecode` |
 | `lsblk` | disk models and transport | `util-linux` (always present) |
 | `journalctl` (run as root) | Xid error scan | systemd (always present) |
-| `fio`, `stress-ng`, `sysbench`, `lm-sensors`, `nvtop` | benchmarks (upcoming) | `hwb install tools` installs them |
+| `stress-ng` | comparable `bench cpu` / `bench thermal` scores (without it, a built-in Python load runs instead) | `hwb install tools` installs it |
+| `fio`, `sysbench`, `lm-sensors`, `nvtop` | upcoming benchmarks, interactive monitoring | `hwb install tools` installs them |
+| root (`sudo`) | CPU package power (RAPL) in benchmarks, DIMM details, Xid scan | |
 
 `hwb install tools` prints the install commands for these, and `--apply` runs them (see [usage](usage.md#install)).
 
@@ -30,16 +32,11 @@ Optional tools make some results richer. hwb works without them and marks the af
 Every tagged release on [GitHub Releases](https://github.com/autonomous-ai/hwb/releases) ships `hwb.pyz` (the single-file bundle), a wheel, an sdist, and `SHA256SUMS`.
 
 ```bash
-# public repo
 curl -fsSLO https://github.com/autonomous-ai/hwb/releases/latest/download/hwb.pyz
 curl -fsSLO https://github.com/autonomous-ai/hwb/releases/latest/download/SHA256SUMS
 sha256sum --check --ignore-missing SHA256SUMS
 
-# private repo (needs an authenticated gh CLI)
-gh release download --repo autonomous-ai/hwb --pattern 'hwb.pyz' --pattern SHA256SUMS
-sha256sum --check --ignore-missing SHA256SUMS
-
-python3 hwb.pyz
+sudo python3 hwb.pyz        # driver checks + inventory
 ```
 
 Every release asset also carries a signed build-provenance attestation. To confirm a file was built by this repo's release workflow:
@@ -48,7 +45,7 @@ Every release asset also carries a signed build-provenance attestation. To confi
 gh attestation verify hwb.pyz --repo autonomous-ai/hwb
 ```
 
-Pin a specific version by replacing `latest/download` with `download/v0.1.0`.
+Pin a specific version by replacing `latest/download` with `download/v0.3.0`.
 
 ## Method 1b — build the bundle yourself
 
@@ -111,7 +108,7 @@ Output from a root run lands in `./hwb-runs/` and is owned by root. Pass `--out 
 
 ## Air-gapped servers
 
-`info` and the install *plan* need no network. Applying an install does: it needs the distro mirrors, plus `developer.download.nvidia.com` on Debian. The upcoming GPU benchmark and vLLM test need PyPI and Hugging Face, or an offline wheelhouse and model directory (planned).
+`info`, `bench cpu`, `bench thermal` and the install *plan* need no network. `submit` needs HTTPS to the gateway (`hwb-gateway.autonomous-ai.workers.dev`, or your `HWB_GATEWAY`). Applying an install needs network: it needs the distro mirrors, plus `developer.download.nvidia.com` on Debian. The upcoming GPU benchmark and vLLM test need PyPI and Hugging Face, or an offline wheelhouse and model directory (planned).
 
 ## Uninstall
 

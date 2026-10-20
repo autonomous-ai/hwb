@@ -101,6 +101,13 @@ def _build(tmp: Path, rig: Rig) -> tuple[Path, Path]:
             put(f"{dev}/vendor", "0x10de\n")
             put(f"{dev}/class", cls + "\n")
             put(f"{dev}/device", "0x2b85\n")
+            if fn == ".0":  # link state as the kernel reports it
+                put(f"{dev}/max_link_speed", "16.0 GT/s PCIe\n")
+                put(f"{dev}/max_link_width", "16\n")
+                gts = "8.0" if addr.startswith("0000:41") else "16.0"
+                put(f"{dev}/current_link_speed", f"{gts} GT/s PCIe\n")
+                put(f"{dev}/current_link_width", "16\n")
+                put(f"{dev}/aer_dev_correctable", "RxErr 0\nBadTLP 0\nTOTAL_ERR_COR 0\n")
             if fn == ".0" and rig.gpu_driver:
                 (drivers / rig.gpu_driver).mkdir(parents=True, exist_ok=True)
                 (root / dev / "driver").symlink_to(drivers / rig.gpu_driver)
@@ -139,13 +146,16 @@ def _build(tmp: Path, rig: Rig) -> tuple[Path, Path]:
         lms = (
             "i=0; while [ $i -lt 15 ]; do "
             'now=$(date "+%Y/%m/%d %H:%M:%S.000"); '
-            'echo "0, $now, 3, 41, 31.5, 210, 2, 0x0000000000000001"; '
-            'echo "1, $now, 2, 43, 33.0, 210, 2, 0x0000000000000001"; '
+            # GPU1 is busy at Gen3 although its slot does Gen4: the downtrained-link case.
+            'echo "0, $now, 3, 41, 31.5, 210, 2, 1, 16, 0x0000000000000001"; '
+            'echo "1, $now, 98, 63, 290.0, 1800, 40000, 3, 16, 0x0000000000000000"; '
             "i=$((i+1)); sleep 0.2; done; exec sleep 60"
         )
+        busids = 'echo "0, 00000000:01:00.0"; echo "1, 00000000:41:00.0"'
         _script(
             bin_dir / "nvidia-smi",
-            f'case "$*" in *-lms=*) {lms};; --query-gpu=*) cat {q(str(fx / "smi.csv"))};; '
+            f'case "$*" in *-lms=*) {lms};; *index,pci.bus_id*) {busids};; '
+            f"--query-gpu=*) cat {q(str(fx / 'smi.csv'))};; "
             f"*) cat {q(str(fx / 'smi.txt'))};; esac",
         )
     else:
@@ -296,7 +306,12 @@ def test_all_on_healthy_rig_with_warnings(rig: Callable[..., Path]) -> None:
     assert {"nvidia-smi", "ldconfig", "journalctl", "nvcc", "lsblk", "stress-ng"} <= ran
 
     # Benchmarks: scores from stress-ng, time series with phases, CPU and GPU temperatures.
-    assert st["bench.cpu"] == "pass" and st["bench.thermal"] == "pass"
+    # GPU1 is busy at Gen3 on a Gen4 link: both benchmarks flag it.
+    assert st["bench.cpu"] == st["bench.thermal"] == "warn"
+    assert "GPU1 PCIe link at Gen3 (max Gen4) while busy" in st_summary(report, "bench.thermal")
+    assert "GPU0" not in st_summary(report, "bench.thermal")  # idle GPU0 at Gen1 is fine
+    pcie = report["sections"]["bench"]["thermal"]["pcie"]
+    assert pcie["1"]["addr"] == "0000:41:00.0" and pcie["1"]["max_gen"] == 4
     assert {"bench.memory", "bench.disk", "bench.gpu"} <= {n for n, s in st.items() if s == "skip"}
     cpu = report["sections"]["bench"]["cpu"]
     assert cpu["method"] == "stress-ng" and cpu["multi_ops_per_s"] == 6172.5
@@ -304,6 +319,7 @@ def test_all_on_healthy_rig_with_warnings(rig: Callable[..., Path]) -> None:
     assert [p["name"] for p in ts["phases"]] == ["idle", "single-core", "all-core", "cooldown"]
     keys = {s["key"] for s in ts["series"]}
     assert {"cpu.temp.Package id 0", "cpu.temp.Package id 1", "gpu0.temp", "gpu1.temp"} <= keys
+    assert {"gpu0.pcie_gen", "gpu1.pcie_gen", "gpu1.pcie_errors"} <= keys
     assert all(len(s["values"]) == len(ts["t"]) for s in ts["series"])
     thermal = report["sections"]["bench"]["thermal"]
     assert thermal["cpu_temp_peak_c"] == 50.0 and thermal["cpu_crit_c"] == 100.0
@@ -381,3 +397,17 @@ def test_one_report_html_collects_every_run(rig: Callable[..., Path]) -> None:
     assert [r["report"]["command"] for r in runs] == ["info", "install", "serve"]  # oldest first
     for r in runs:
         assert r["report"] == json.loads((out / r["id"] / "report.json").read_text())
+
+
+def test_monitor_records_without_adding_load(rig: Callable[..., Path]) -> None:
+    out = rig()
+    code = cli.main(["--out", str(out), "monitor", "--duration", "2", "--interval", "0.25"])
+    run_dir, report, _ = _outputs(out)
+    st = _statuses(report)
+    assert st == {"bench.monitor": "warn"}  # GPU1: busy at Gen3 on a Gen4 link
+    assert code == 0
+    mon = report["sections"]["bench"]["monitor"]
+    assert [p["name"] for p in mon["timeseries"]["phases"]] == ["monitor"]
+    assert "cpu_clock_sag_pct" not in mon  # clocks follow the workload, not our load
+    log = (run_dir / "hwb.log.jsonl").read_text()
+    assert "stress-ng" not in log and "pyload" not in log  # no load generator ran

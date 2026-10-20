@@ -8,6 +8,7 @@ from hwb.detect.gpu import (
     check_blackwell,
     check_bound,
     check_nvidia_smi,
+    check_pci,
     check_pcie_link,
     parse_driver_version,
     scan_pci,
@@ -87,3 +88,63 @@ def test_pcie_width_degraded_warns() -> None:
     r = check_pcie_link(f)
     assert r.status is Status.WARN
     assert "GPU1 x4/x16" in r.summary
+
+
+# The layout of a host that passes three of its eight GPUs through to QEMU VMs.
+MIXED = [
+    PciGpu(addr, "0x2684", "0x030000", drv)
+    for addr, drv in (
+        ("0000:01:00.0", "nvidia"),
+        ("0000:21:00.0", "nvidia"),
+        ("0000:41:00.0", "nvidia"),
+        ("0000:61:00.0", "nvidia"),
+        ("0000:81:00.0", "vfio-pci"),
+        ("0000:a1:00.0", "vfio-pci"),
+        ("0000:c1:00.0", "vfio-pci"),
+        ("0000:e1:00.0", "nvidia"),
+    )
+]
+HOST_ROWS = [_row(index=str(i), name="NVIDIA GeForce RTX 4090") for i in range(5)]
+
+
+def test_gpus_passed_through_to_vms_are_accepted() -> None:
+    f = GpuFacts(pci=MIXED, smi_rows=HOST_ROWS, modules={"nvidia"})
+    bound = check_bound(f)
+    assert bound.status is Status.PASS
+    assert bound.summary == "5 bound to nvidia, 3 passed through to VMs (vfio-pci)"
+    # nvidia-smi only sees the host's GPUs: 5 of 8 is correct, not a missing GPU.
+    assert check_nvidia_smi(f).status is Status.PASS
+    assert "3 passed through to VMs" in check_pci(f).summary
+
+
+def test_missing_host_gpu_still_fails_next_to_passthrough() -> None:
+    f = GpuFacts(pci=MIXED, smi_rows=HOST_ROWS[:4], modules={"nvidia"})
+    r = check_nvidia_smi(f)
+    assert r.status is Status.FAIL
+    assert r.summary == "nvidia-smi sees 4 of 5 host GPUs (3 passed through to VMs (vfio-pci))"
+
+
+def test_gpu_bound_to_nothing_still_fails() -> None:
+    pci = [*MIXED[:7], PciGpu("0000:e1:00.0", "0x2684", "0x030000", None)]
+    r = check_bound(GpuFacts(pci=pci))
+    assert r.status is Status.FAIL and r.summary.endswith("0000:e1:00.0")
+
+
+def test_pure_vm_host_skips_host_driver_checks() -> None:
+    from hwb.detect.gpu import CHECKS
+
+    pci = [PciGpu(f"0000:{i:02x}:00.0", "0x2684", "0x030000", "vfio-pci") for i in (0x81, 0xA1)]
+    f = GpuFacts(pci=pci, smi_error="couldn't communicate with the NVIDIA driver", secure_boot=True)
+    results = {c.__name__: c(f) for c in CHECKS}
+    for name in (
+        "check_kernel_module",
+        "check_nvidia_smi",
+        "check_libcuda",
+        "check_headers",
+        "check_secure_boot",
+    ):
+        assert results[name].status is Status.SKIP, name
+        assert "passed through to VMs" in results[name].summary
+    assert results["check_kernel_module"].name == "gpu.kernel_module"
+    assert results["check_pci"].status is results["check_bound"].status is Status.PASS
+    assert all(r.status is not Status.FAIL for r in results.values())

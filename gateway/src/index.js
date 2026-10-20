@@ -22,7 +22,7 @@
 // through their random UUID.
 
 import { encode, renderSVG } from "uqr";
-import { landingPage, notFoundPage, reportPage } from "./pages.js";
+import { icon, landingPage, notFoundPage, reportPage } from "./pages.js";
 import { sanitizeBundle, ValidationError } from "./sanitize.js";
 import { summarize } from "./summary.js";
 import { UUID_RE, bearer, error, html, intVar, json, randomToken, safeEqual, sha256Hex } from "./util.js";
@@ -286,6 +286,11 @@ async function route(request, env, ctx) {
   const method = request.method === "HEAD" ? "GET" : request.method; // the runtime drops HEAD bodies
 
   if (path === "/" && method === "GET") return html(landingPage());
+  const iconBytes = method === "GET" ? icon(path) : null;
+  if (iconBytes)
+    return new Response(iconBytes, {
+      headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=86400", "X-Content-Type-Options": "nosniff" },
+    });
   if (path === "/api/reports") return method === "POST" ? submit(request, env) : error(405, "use POST", { Allow: "POST" });
   if (path === "/api/stats" && method === "GET") return stats(request, env);
 

@@ -2,3 +2,4 @@ node_modules/
 .wrangler/
 .dev.vars
 src/viewer.gen.js
+src/icons.gen.js

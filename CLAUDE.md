@@ -53,7 +53,7 @@ gateway/               Cloudflare Worker (JS): R2 report store, D1 analysis tabl
 ## CI / release
 
 - `.github/workflows/ci.yml` runs lint, mypy, pytest on Python 3.10–3.13, `make dist`, then smoke-tests `hwb.pyz` on stock `ubuntu:22.04`, `ubuntu:24.04`, `debian:12` and `archlinux` containers. If you add a dependency outside the stdlib or a 3.11+ API, CI fails there.
-- `.github/workflows/release.yml` runs on a `v*` tag: it builds the pyz, `install.sh`, wheel, sdist and SHA256SUMS, attests provenance, creates the GitHub Release, then deploys the gateway (secret `CLOUDFLARE_API_TOKEN`). `install.sh` (repo root) is what `curl …/latest/download/install.sh | sudo sh` runs: keep it POSIX sh.
+- `.github/workflows/release.yml` runs on a `v*` tag: it builds the pyz, `install.sh`, wheel, sdist and SHA256SUMS, attests provenance, creates the GitHub Release, then deploys the gateway (secret `CLOUDFLARE_API_TOKEN`). `install.sh` (repo root) is what `curl -fsSL https://autonomous.ai/hwb-install.sh | sudo sh` runs (a redirect to the latest release asset): keep it POSIX sh.
 - The version lives in **two places**, `pyproject.toml` and `src/hwb/__init__.py`. Bump both. `tests/test_version.py` and the release job enforce that they match.
 
 ## Domain notes

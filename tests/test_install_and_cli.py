@@ -41,7 +41,7 @@ def test_unknown_distro_rejected() -> None:
 
 def test_cli_detect_writes_report_even_off_linux(tmp_path: Path) -> None:
     code = main(["--out", str(tmp_path), "detect"])
-    (run_dir,) = tmp_path.iterdir()
+    (run_dir,) = (p for p in tmp_path.iterdir() if p.is_dir())
     report = json.loads((run_dir / "report.json").read_text())
     assert report["exit_code"] == code
     assert any(r["name"] == "gpu.pci" for r in report["results"])

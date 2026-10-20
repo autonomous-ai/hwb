@@ -42,6 +42,46 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - run: uv run --python ${{ matrix.python }} pytest -q
 
+  ui:
+    name: report UI
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Committed src/hwb/assets is up to date
+        run: git diff --exit-code -- ../src/hwb/assets/ || { echo "::error::run 'make ui' and commit src/hwb/assets/index.html"; exit 1; }
+
+  gateway:
+    name: gateway (Worker, runs in workerd)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gateway
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: gateway/package-lock.json
+      - run: npm ci
+      - run: npm test
+
   bundle:
     name: build bundle
     runs-on: ubuntu-latest
@@ -95,3 +135,6 @@ jobs:
           set +e; python3 dist/hwb.pyz --out runs detect; rc=$?; set -e
           test "$rc" -eq 1 || { echo "detect exited $rc, expected 1"; exit 1; }
           if grep -h '"status": "error"' runs/*/report.json; then echo "ERROR results found"; exit 1; fi
+          # One combined viewer for all three runs above.
+          test "$(find runs -name report.html | wc -l)" -eq 1
+          grep -q '<script id="hwb-report" type="application/json">{"runs": \[' runs/report.html

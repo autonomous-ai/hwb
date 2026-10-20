@@ -1,0 +1,60 @@
+# hwb gateway. First-time setup (see README.md):
+#   npx wrangler login
+#   npx wrangler r2 bucket create hwb-reports
+#   npx wrangler d1 create hwb-reports      # paste the printed database_id below
+#   npx wrangler secret put ADMIN_TOKEN     # for /api/stats and deleting any report
+#   npx wrangler secret put RATE_LIMIT_SALT # random; salts the hashed client keys of the upload limit
+#   npx wrangler secret put UPLOAD_TOKEN    # optional: lets trusted fleets skip the upload limit
+#   npm run deploy
+name = "hwb-gateway"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+workers_dev = true
+# Cloudflare account to deploy to (not a secret). CLOUDFLARE_ACCOUNT_ID overrides it.
+account_id = "34f362d8c2477ecad4abe0b7b4ac4aac"
+
+[vars]
+# Public origin used in returned links, e.g. "https://hwb.example.com". Empty: the request's origin.
+PUBLIC_BASE_URL = ""
+# Public gateway: anyone may upload, bounded by the rate limits below. "true" makes uploads
+# need `Authorization: Bearer <UPLOAD_TOKEN>`.
+REQUIRE_UPLOAD_TOKEN = "false"
+# Upload cap, enforced while streaming the body. A multi-run report is typically 5-20 kB.
+MAX_REPORT_BYTES = "512000"
+# Hard upload limits in D1 (the rate-limit bindings below are best-effort). 0 disables.
+UPLOADS_PER_HOUR = "30"   # per client address
+UPLOADS_PER_DAY = "2000"  # whole gateway
+# Delete reports (R2 object + D1 rows) after this many days; "0" keeps them.
+RETENTION_DAYS = "90"
+
+[[r2_buckets]]
+binding = "REPORTS"
+bucket_name = "hwb-reports"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "hwb-reports"
+database_id = "736444ba-d874-4538-b5b4-80b0fe1fa335"
+migrations_dir = "migrations"
+
+# Per-IP rate limits (Cloudflare rate-limiting bindings; period must be 10 or 60 seconds).
+# Best-effort and eventually consistent: a cheap first filter; UPLOADS_PER_HOUR is the hard limit.
+# The IP is used only as a counter key and is never stored. namespace_id: unique per account.
+[[unsafe.bindings]]
+name = "UPLOAD_LIMITER"
+type = "ratelimit"
+namespace_id = "1001"
+simple = { limit = 5, period = 60 }
+
+[[unsafe.bindings]]
+name = "READ_LIMITER"
+type = "ratelimit"
+namespace_id = "1002"
+simple = { limit = 120, period = 60 }
+
+# Daily purge of reports older than RETENTION_DAYS.
+[triggers]
+crons = ["17 3 * * *"]
+
+[observability]
+enabled = true

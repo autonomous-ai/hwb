@@ -1,0 +1,21 @@
+{
+  "name": "hwb-gateway",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Cloudflare Worker that stores hwb reports (R2), indexes them for analysis (D1) and serves them as web pages.",
+  "type": "module",
+  "scripts": {
+    "embed": "node scripts/embed-viewer.mjs",
+    "dev": "npm run embed && wrangler dev",
+    "test": "npm run embed && vitest run",
+    "deploy": "npm run embed && wrangler d1 migrations apply hwb-reports --remote && wrangler deploy"
+  },
+  "dependencies": {
+    "uqr": "0.1.2"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.6.16",
+    "vitest": "2.1.8",
+    "wrangler": "3.114.0"
+  }
+}

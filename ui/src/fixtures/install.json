@@ -1,0 +1,59 @@
+{
+  "schema": 1,
+  "tool": {
+    "name": "hwb",
+    "version": "0.1.0"
+  },
+  "command": "install",
+  "host": "gpu-rig-01",
+  "started_at": "2026-10-20T06:10:04.455857+00:00",
+  "finished_at": "2026-10-20T06:10:04.456466+00:00",
+  "exit_code": 0,
+  "results": [
+    {
+      "name": "install.driver",
+      "status": "skip",
+      "summary": "dry run; re-run with --apply as root",
+      "hint": null,
+      "data": {}
+    }
+  ],
+  "sections": {
+    "install_plan": {
+      "target": "driver",
+      "steps": [
+        {
+          "title": "refresh package index",
+          "argv": [
+            "env",
+            "DEBIAN_FRONTEND=noninteractive",
+            "apt-get",
+            "update"
+          ]
+        },
+        {
+          "title": "install kernel headers",
+          "argv": [
+            "env",
+            "DEBIAN_FRONTEND=noninteractive",
+            "apt-get",
+            "install",
+            "-y",
+            "linux-headers-6.8.0-45-generic"
+          ]
+        },
+        {
+          "title": "install NVIDIA driver 580 (server, open modules)",
+          "argv": [
+            "env",
+            "DEBIAN_FRONTEND=noninteractive",
+            "apt-get",
+            "install",
+            "-y",
+            "nvidia-driver-580-server-open"
+          ]
+        }
+      ]
+    }
+  }
+}

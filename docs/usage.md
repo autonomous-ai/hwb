@@ -40,7 +40,7 @@ hwb serve --model Qwen/Qwen3-8B
 hwb all --duration 300 --model Qwen/Qwen3-8B
 ```
 
-Attach `report.md` from each run directory to the server's acceptance ticket.
+Attach `hwb-runs/report.html` to the server's acceptance ticket. It holds every run in that folder, with an overview tab. Paste `report.md` from a run directory if the ticket needs plain text.
 
 ---
 
@@ -137,6 +137,31 @@ hwb all [--duration SECONDS] [--model HF_ID]
 
 Runs `info`, `detect`, then `bench all`, plus `serve` if `--model` is given. Everything goes into a single run directory and report.
 
+### `submit`
+
+```
+hwb [--out DIR] submit [--gateway URL] [--label TEXT] [--run DIR ...] [-y] [--dry-run]
+hwb [--out DIR] submit --delete ID [-y]
+```
+
+Shares the runs in `--out` through the public [hwb gateway](../gateway/README.md) (`https://hwb-gateway.autonomous-ai.workers.dev`, no account or token needed) and prints the link plus a QR code to scan. The page looks just like `report.html`.
+
+1. **Sanitize, on the rig.** The host name becomes a stable alias (`rig-1a2b3c4d`). GPU UUIDs, serials, MAC/IP/email addresses, home directory paths and Xid process names are removed. The gateway checks all of this again.
+2. **Preview.** hwb lists the runs, how the rig will appear, what was removed and the destination.
+3. **Confirm.** Nothing is sent until you answer `y`. Without a terminal, `--yes` is required. `--dry-run` writes the exact upload to `<out>/submission-preview.json` and sends nothing.
+4. **Upload.** You get `https://<gateway>/r/<uuid>` and a QR code. The report is unlisted: only people with the link can open it.
+
+The delete token is appended to `<out>/submissions.jsonl` (mode 0600). `hwb submit --delete <id>` removes the report from the gateway. The gateway also deletes reports after its retention period (90 days by default).
+
+| env | |
+|---|---|
+| `HWB_GATEWAY` | another gateway (`https://…`; `http://` only for localhost), or `off` to disable sharing and the prompt |
+| `HWB_GATEWAY_TOKEN` | only for a private gateway, or to skip the public gateway's rate limit |
+
+Limits on the public gateway: uploads up to 512 kB (hwb refuses bigger ones before sending; use `--run` to send fewer runs), 30 uploads per hour per address, and 90 days of retention. When a limit is hit, hwb says how long to wait.
+
+When hwb runs in a terminal, every command offers to submit when it finishes. Answering anything but `y` skips it, and the command's exit code is unaffected. `HWB_GATEWAY=off` turns the offer off.
+
 ---
 
 ## Reading the results
@@ -170,6 +195,13 @@ FAIL   gpu.nvidia_smi     nvidia-smi sees 1 of 2 PCI GPUs
 Use these in scripts, for example `hwb detect || alert "rig01 GPU stack broken"`.
 
 ### Output files
+
+`<--out>/report.html` is the **one** report page for that output directory, regenerated after every run from all `*/report.json` beside it. It is self-contained (inline CSS/JS, no network) and opens in any current browser with JavaScript on.
+
+- **Run tabs** (top bar): **Overview** first, then each run, newest first. The overview keeps the latest result of each check across runs, says which run it came from, and lists the runs. Runs from several hosts in one folder get one overview per host.
+- **Section tabs** (per run or overview): Summary (verdict, counts, "needs attention" with hints), Checks (filter by status and text, expandable data), Inventory, GPU driver, Install plan, Raw JSON (with download).
+- The current tab lives in the URL (`report.html#/<run>/<tab>`), so links and the back button work. Printing includes every section of the current tab's run.
+- Everything in that folder goes into the page. Use a separate `--out` per rig if you share the file outside your team.
 
 Each run writes to `<--out>/<YYYYMMDDTHHMMSSZ>-<host>-<command>/`:
 

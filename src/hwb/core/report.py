@@ -1,8 +1,10 @@
-"""Write report.json / report.md into the run directory and print the console summary."""
+"""Write report.json / report.md into the run directory, refresh the combined report.html
+next to the run directories, and print the console summary."""
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 from datetime import datetime, timezone
@@ -11,7 +13,10 @@ from typing import Any, TextIO
 
 from .. import __version__
 from .context import RunContext
+from .report_html import INDEX_HTML, write_index
 from .result import CheckResult, Status
+
+log = logging.getLogger(__name__)
 
 REPORT_SCHEMA = 1
 
@@ -25,7 +30,7 @@ _COLORS = {
 
 
 def _atomic_write(path: Path, text: str) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")  # pid: concurrent runs share --out
     tmp.write_text(text, encoding="utf-8")
     tmp.replace(path)
 
@@ -67,6 +72,11 @@ def write_report(ctx: RunContext) -> Path:
     path = ctx.run_dir / "report.json"
     _atomic_write(path, json.dumps(payload, indent=2, default=str))
     _atomic_write(ctx.run_dir / "report.md", render_markdown(payload))
+    try:
+        _atomic_write(ctx.run_dir.parent / INDEX_HTML, write_index(ctx.run_dir.parent))
+    except (OSError, ValueError) as exc:
+        # The viewer is a convenience; report.json and report.md above are the record.
+        log.warning("%s not written: %s", INDEX_HTML, exc, exc_info=True)
     return path
 
 

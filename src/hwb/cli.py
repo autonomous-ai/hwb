@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import signal
 import sys
 from collections.abc import Callable, Sequence
@@ -19,9 +20,12 @@ from .core.errors import HwbError
 from .core.log import setup_logging
 from .core.platform import is_linux, os_info
 from .core.report import render_console, write_report
+from .core.report_html import INDEX_HTML
 from .detect.gpu import run_detect
 from .install import plan as install
 from .metrics.collect import run_info
+from .share import client as share_client
+from .share import command as share
 
 log = logging.getLogger("hwb")
 
@@ -65,6 +69,31 @@ def build_parser() -> argparse.ArgumentParser:
     a = sub.add_parser("all", help="info + detect + all benchmarks (+ serve with --model)")
     a.add_argument("--duration", type=int, default=60)
     a.add_argument("--model", help="also run the vLLM test with this model")
+
+    sb = sub.add_parser(
+        "submit",
+        help="share the runs in --out through an hwb gateway (sanitized, after confirmation)",
+        description="Upload the runs in --out to an hwb gateway and print the link and a QR code. "
+        "Host names, addresses, serials, UUIDs and user paths are removed first; you see a "
+        "summary and confirm before anything is sent.",
+    )
+    sb.add_argument(
+        "--gateway",
+        help=f"gateway URL (default: ${share_client.ENV_GATEWAY}, else {share_client.DEFAULT_GATEWAY})",
+    )
+    sb.add_argument("--label", help="short label shown with the report, e.g. a rack position")
+    sb.add_argument(
+        "--run",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help="only this run directory (repeatable)",
+    )
+    sb.add_argument("-y", "--yes", action="store_true", help="skip the confirmation prompt")
+    sb.add_argument(
+        "--dry-run", action="store_true", help="write the exact upload to --out and send nothing"
+    )
+    sb.add_argument("--delete", metavar="ID", help="delete a report you submitted from this --out")
     return p
 
 
@@ -118,8 +147,50 @@ def _on_sigterm(signum: int, frame: FrameType | None) -> None:
     raise KeyboardInterrupt
 
 
+def _cmd_submit(args: argparse.Namespace) -> int:
+    setup_logging(None, verbose=args.verbose)
+    token = os.environ.get(share_client.ENV_TOKEN)
+    try:
+        if args.delete:
+            return share.delete_submission(
+                args.out, args.delete, gateway=args.gateway, assume_yes=args.yes
+            )
+        return share.submit_runs(
+            args.out,
+            gateway=args.gateway,
+            token=token,
+            label=args.label,
+            only=args.run,
+            assume_yes=args.yes,
+            dry_run=args.dry_run,
+        )
+    except KeyboardInterrupt:
+        return EXIT_INTERRUPTED
+    except HwbError as exc:
+        log.error("%s", exc)
+        return EXIT_ERROR
+
+
+def _offer_submit(out: Path) -> None:
+    """After an interactive run, offer to share it (the operator still confirms).
+    HWB_GATEWAY=off turns the offer off."""
+    if not share_client.sharing_enabled() or not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return
+    gateway = share_client.resolve_gateway()
+    print()
+    try:
+        share.submit_runs(
+            out, gateway=gateway, token=os.environ.get(share_client.ENV_TOKEN), label=None
+        )
+    except (HwbError, KeyboardInterrupt) as exc:
+        # Sharing is optional; it never changes the run's own exit code.
+        print(f"not submitted: {exc or 'interrupted'}", file=sys.stderr)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "submit":  # works on existing runs; must not create a run directory
+        return _cmd_submit(args)
     try:
         ctx = RunContext.create(args.out, args.command)
     except OSError as exc:
@@ -149,6 +220,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             print()
             render_console(ctx.results)
         print(f"\nreport: {report}")
+        if (index := args.out / INDEX_HTML).exists():
+            print(f"view:   {index}  (all runs in {args.out})")
+    if code is None:
+        _offer_submit(args.out)
     return code if code is not None else ctx.exit_code()
 
 

@@ -18,7 +18,7 @@ from .result import CheckResult, Status
 
 log = logging.getLogger(__name__)
 
-REPORT_SCHEMA = 1
+REPORT_SCHEMA = 2  # 2: sections.bench with time series
 
 _COLORS = {
     Status.PASS: "\033[32m",

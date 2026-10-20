@@ -2,6 +2,7 @@ import { SELF, createExecutionContext, env, waitOnExecutionContext } from "cloud
 import { describe, expect, it } from "vitest";
 import broken from "../../ui/src/fixtures/broken.json";
 import healthy from "../../ui/src/fixtures/healthy.json";
+import bench from "../../ui/src/fixtures/bench.json";
 import worker, { purgeExpired } from "../src/index.js";
 import { sanitizeBundle } from "../src/sanitize.js";
 
@@ -302,5 +303,28 @@ describe("hard upload quota", () => {
     await post(env, "203.0.113.11");
     await purgeExpired(env, Date.now() + 2 * 86_400_000);
     expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM upload_counters").first()).n).toBe(0);
+  });
+});
+
+describe("benchmarks", () => {
+  it("indexes CPU scores and thermal results, merging benches from separate runs", async () => {
+    const cpuRun = structuredClone(bench);
+    delete cpuRun.sections.bench.thermal;
+    cpuRun.results = cpuRun.results.filter((r) => r.name !== "bench.thermal");
+    const thermalRun = structuredClone(bench);
+    delete thermalRun.sections.bench.cpu;
+    thermalRun.started_at = "2026-10-20T09:00:00+00:00";
+    thermalRun.results = [{ name: "bench.thermal", status: "fail", summary: "at limit", hint: "cool it", data: {} }];
+    const { res, body } = await submit(bundleOf(cpuRun, thermalRun));
+    expect(res.status).toBe(201);
+    const row = await env.DB.prepare(
+      "SELECT cpu_score, cpu_single_score, cpu_score_method, cpu_temp_peak_c, cpu_temp_margin_c, thermal_verdict FROM reports WHERE id = ?",
+    )
+      .bind(body.id)
+      .first();
+    expect(row).toMatchObject({ cpu_score: 26411.3, cpu_single_score: 268.9, cpu_score_method: "stress-ng", thermal_verdict: "fail" });
+    expect(row.cpu_temp_peak_c).toBeGreaterThan(80);
+    const stats = await (await SELF.fetch(`${BASE}/api/stats`, { headers: ADMIN })).json();
+    expect(stats.cpu_bench.some((r) => r.method === "stress-ng" && r.runs >= 1)).toBe(true);
   });
 });

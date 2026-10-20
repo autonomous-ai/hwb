@@ -1,12 +1,14 @@
 # Using hwb
 
 ```
-hwb [--version] [-v] [--out DIR] <command> [options]
+hwb [--version] [-v] [--out DIR] [command] [options]
 ```
+
+With no command, `hwb` runs `info`: the GPU driver checks plus the hardware inventory.
 
 The examples write the command as `hwb`. Substitute `python3 hwb.pyz` or `./hwb.sh`, depending on [how you installed it](install.md).
 
-**Global options go before the command:** `hwb -v --out /data/runs detect` works, `hwb detect -v` does not.
+**Global options go before the command:** `hwb -v --out /data/runs info` works, `hwb info -v` does not.
 
 | option | default | meaning |
 |---|---|---|
@@ -17,21 +19,19 @@ The examples write the command as `hwb`. Substitute `python3 hwb.pyz` or `./hwb.
 ## Recommended workflow for a fresh server
 
 ```bash
-# 1. What is in the box?
-hwb info
+# 1. Is the GPU stack healthy, and what is in the box?
+sudo hwb
 
-# 2. Is the GPU stack healthy?
-hwb detect
-
-# 3. If detect FAILs on the driver: review the plan, apply it, reboot, re-check
+# 2. If the driver checks FAIL: review the plan, apply it, reboot, re-check
 hwb install driver
 sudo hwb install driver --apply
 sudo reboot
-hwb detect
+sudo hwb
 
-# 4. Benchmark tools, then benchmarks (benchmarks are work in progress)
+# 3. Benchmark tools (optional: stress-ng makes CPU scores comparable), then benchmarks
 sudo hwb install tools --apply
-hwb bench all --duration 300
+sudo hwb bench cpu
+sudo hwb bench thermal --duration 600
 
 # 5. Real-model smoke test (work in progress)
 hwb serve --model Qwen/Qwen3-8B
@@ -46,9 +46,9 @@ Attach `hwb-runs/report.html` to the server's acceptance ticket. It holds every 
 
 ## Commands
 
-### `info`
+### `info` (default)
 
-Collects the hardware inventory without changing anything:
+Read-only. First the GPU driver and CUDA health checks (see the [check reference](checks.md) for what each result means and how to fix it), then the hardware inventory:
 
 - **system:** OS, kernel, uptime
 - **board:** vendor, model, BIOS version and date
@@ -63,18 +63,11 @@ Collects the hardware inventory without changing anything:
 Serial numbers, MAC addresses and IPs are deliberately not collected.
 
 ```bash
-hwb info
-sudo hwb info        # adds DIMM details
+hwb                  # same as: hwb info
+sudo hwb             # adds DIMM details and scans the kernel log for Xid errors
 ```
 
-### `detect`
-
-Runs the GPU driver and CUDA health checks. It's read-only. See the [check reference](checks.md) for what each result means and how to fix it.
-
-```bash
-hwb detect
-sudo hwb detect      # also scans the kernel log for Xid errors
-```
+It exits 1 when a check FAILs (see [exit codes](#exit-codes)), so `hwb || alert ...` works in scripts.
 
 ### `install`
 
@@ -97,25 +90,36 @@ hwb install {driver,cuda,tools} [--apply] [-y] [--branch N] [--cuda-version X.Y]
 | `--branch N` | Ubuntu driver branch (default `580`) |
 | `--cuda-version X.Y` | pin a toolkit version, e.g. `12.8` (default: the latest in the repo) |
 
-Steps run in order and **stop at the first failure**. The failing step's stderr is shown in the result, and the full output is in `hwb.log.jsonl`. After `install driver --apply`, reboot and run `hwb detect`.
+Steps run in order and **stop at the first failure**. The failing step's stderr is shown in the result, and the full output is in `hwb.log.jsonl`. After `install driver --apply`, reboot and run `hwb` again.
 
 Notes:
 - All drivers use the **open kernel modules**. RTX 50xx (Blackwell) requires them, and NVIDIA recommends them for Ampere (A6000) as well.
 - The CUDA toolkit (`nvcc`) is **optional**. PyTorch and vLLM wheels bundle their own CUDA runtime and only need the driver.
 - On Debian with Secure Boot on, enroll the DKMS MOK key (`mokutil --import`) or disable Secure Boot.
-- Omarchy usually installs the NVIDIA driver during OS setup. Run `hwb detect` before installing anything.
+- Omarchy usually installs the NVIDIA driver during OS setup. Run `hwb` before installing anything.
 
-### `bench` 🚧
+### `bench`
 
 ```
-hwb bench {cpu,memory,disk,thermal,gpu,all} [--duration SECONDS] [--path DIR]
+hwb bench {cpu,memory,disk,thermal,gpu,all} [--duration SECONDS] [--interval SECONDS] [--path DIR]
 ```
 
-Not implemented yet: every kind reports SKIP. Planned behavior:
-- **cpu, memory:** stress-ng / sysbench, measured per NUMA node.
-- **disk:** fio on a *file* in `--path` (default `/var/tmp`). It never writes to raw devices.
-- **thermal:** sustained CPU+GPU load for `--duration`. FAILs on thermal throttling or Xid errors.
-- **gpu:** GEMM TFLOPS per dtype, memory bandwidth, PCIe host↔device bandwidth, GPU-to-GPU P2P and NCCL all-reduce. Runs in an isolated uv environment.
+While a benchmark runs, a sampler records a time series every `--interval` seconds (default 1):
+- **CPU:** utilisation, average clock, package temperatures (hwmon `coretemp`/`k10temp`), package power (RAPL, needs root) and the kernel's thermal-throttle counters.
+- **System:** memory use and load average.
+- **GPUs:** temperature, utilisation, power, SM clock and throttle reasons, from `nvidia-smi -lms`.
+
+Every sample goes to `bench-<kind>.csv` and `bench-<kind>-gpu.csv` in the run directory. The report keeps up to 300 points per series (temperatures keep their peaks). The viewer's **Benchmarks** tab draws them as charts, with each phase shaded.
+
+| kind | what it does | judged on |
+|---|---|---|
+| `cpu` | idle baseline → single-thread → all-core for `--duration` → cooldown | throughput (bogo ops/s with `stress-ng`, else Python loop iterations/s), scaling, clock, power, peak temp. WARN if the CPUs are under 90% busy at full load, or on throttle events |
+| `thermal` | idle → all-core load for `--duration` (use 300–900 s) → cooldown | FAIL within 3 °C of the sensor's limit (Intel 100 °C, or `temp*_crit`; AMD Tctl 95 °C). WARN within 10 °C, on throttle events, on ≥10% clock sag over the run, or on GPU thermal/hardware slowdowns. A temperature still rising at the end is noted: run longer |
+| `memory`, `disk`, `gpu` | not implemented yet (SKIP) | planned: stress-ng/sysbench per NUMA node; fio on a *file* in `--path`, never raw devices; GEMM/bandwidth/P2P/NCCL in an isolated uv venv |
+
+Load comes from `stress-ng --cpu-method matrixprod` when it is installed (`hwb install tools`). Without it, a stdlib fallback runs one busy Python process per thread: the results are still valid for temperatures and stability, but the scores only compare with other fallback runs. All load processes run in their own process group and are always stopped, including on Ctrl-C. `thermal` monitors GPUs but doesn't load them; GPU load comes with `bench gpu`.
+
+**Run benchmarks on an otherwise idle machine.** Other workloads compete for the CPUs and heat them, which skews both the scores and the temperatures.
 
 ### `serve` 🚧
 
@@ -132,10 +136,10 @@ Not implemented yet: it reports SKIP. Planned behavior:
 ### `all`
 
 ```
-hwb all [--duration SECONDS] [--model HF_ID]
+hwb all [--duration SECONDS] [--interval SECONDS] [--model HF_ID]
 ```
 
-Runs `info`, `detect`, then `bench all`, plus `serve` if `--model` is given. Everything goes into a single run directory and report.
+Runs `info`, then `bench all`, plus `serve` if `--model` is given. Everything goes into a single run directory and report.
 
 ### `submit`
 
@@ -192,7 +196,7 @@ FAIL   gpu.nvidia_smi     nvidia-smi sees 1 of 2 PCI GPUs
 | `2` | hwb error: crashed check, bad environment, refused install, etc. |
 | `130` | interrupted (Ctrl-C or SIGTERM). The report is still written |
 
-Use these in scripts, for example `hwb detect || alert "rig01 GPU stack broken"`.
+Use these in scripts, for example `hwb || alert "rig01 GPU stack broken"`.
 
 ### Output files
 

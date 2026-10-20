@@ -1,35 +1,43 @@
-"""Benchmarks. Each kind exposes ``run(ctx, opts) -> None`` and reports via ctx.add/ctx.check.
+"""Benchmarks. Each kind reports through ctx.add and puts its numbers and time series in
+``ctx.sections["bench"][kind]``; the viewer charts them.
 
-Status (v0.1): interfaces only. Planned implementation, in order:
-
-- cpu:     stress-ng --cpu (bogo-ops/s) + sysbench cpu; per-socket via numactl when NUMA > 1.
-- memory:  sysbench memory / stress-ng --stream; per-NUMA-node bandwidth.
-- disk:    fio seq read/write 1M QD32 + rand 4k QD64, O_DIRECT, on a file in --path (never raw devices
-           unless --device is given explicitly and confirmed).
-- thermal: sustained stress-ng --cpu + GPU burn for --duration while metrics.sampler records temps,
-           clocks, power and throttle reasons; FAIL on thermal throttling or Xid during the run.
-- gpu:     torch payload in an isolated uv venv: GEMM TFLOPS (fp32/tf32/bf16/fp16), HBM/GDDR bandwidth,
-           H2D/D2H PCIe bandwidth per GPU, P2P + NCCL all-reduce across GPUs.
+- cpu:     single-thread and all-core throughput (stress-ng, else a Python fallback),
+           with utilization, clocks, temperatures and power sampled throughout.
+- thermal: sustained all-core load; judges peak temperature vs the sensor limit, throttle
+           events, clock sag and GPU slowdowns.
+- memory, disk, gpu: not implemented yet (planned: stress-ng/sysbench, fio, torch payload).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
+import logging
+from collections.abc import Callable
 
 from ..core.context import RunContext
+from ..core.log import fields
 from ..core.result import CheckResult, Status
+from . import cpu, thermal
+from .options import BenchOptions
+
+__all__ = ["KINDS", "BenchOptions", "run"]
+
+log = logging.getLogger(__name__)
 
 KINDS = ("cpu", "memory", "disk", "thermal", "gpu")
-
-
-@dataclass(frozen=True)
-class BenchOptions:
-    duration_s: int = 60
-    path: Path = Path("/var/tmp")  # noqa: S108 - disk-bench scratch dir, user-overridable
+_IMPLEMENTED: dict[str, Callable[[RunContext, BenchOptions], None]] = {
+    "cpu": cpu.run,
+    "thermal": thermal.run,
+}
 
 
 def run(ctx: RunContext, kind: str, opts: BenchOptions) -> None:
-    kinds = KINDS if kind == "all" else (kind,)
-    for k in kinds:
-        ctx.add(CheckResult(f"bench.{k}", Status.SKIP, "not implemented yet"))
+    for k in KINDS if kind == "all" else (kind,):
+        bench = _IMPLEMENTED.get(k)
+        if bench is None:
+            ctx.add(CheckResult(f"bench.{k}", Status.SKIP, "not implemented yet"))
+            continue
+        try:
+            bench(ctx, opts)
+        except Exception as exc:  # isolation boundary: one broken benchmark must not end the run
+            log.debug("benchmark crashed", exc_info=True, extra=fields(bench=k))
+            ctx.add(CheckResult(f"bench.{k}", Status.ERROR, f"{type(exc).__name__}: {exc}"))

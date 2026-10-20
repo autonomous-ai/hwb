@@ -224,7 +224,7 @@ async function stats(request, env) {
     return error(401, "admin token required", { "WWW-Authenticate": "Bearer" });
   const days = Math.min(Math.max(intVar(new URL(request.url).searchParams.get("days"), 30), 1), 365);
   const since = new Date(Date.now() - days * 86_400_000).toISOString();
-  const [totals, byVerdict, byGpu, topChecks, perDay] = await env.DB.batch([
+  const [totals, byVerdict, byGpu, topChecks, perDay, cpuBench] = await env.DB.batch([
     env.DB.prepare("SELECT COUNT(*) AS reports, COALESCE(SUM(views), 0) AS views FROM reports WHERE created_at >= ?").bind(since),
     env.DB.prepare("SELECT verdict, COUNT(*) AS reports FROM reports WHERE created_at >= ? GROUP BY verdict ORDER BY reports DESC").bind(since),
     env.DB.prepare(
@@ -244,6 +244,14 @@ async function stats(request, env) {
       `SELECT substr(created_at, 1, 10) AS day, COUNT(*) AS reports, SUM(verdict = 'fail') AS failed
        FROM reports WHERE created_at >= ? GROUP BY day ORDER BY day`,
     ).bind(since),
+    // Scores are only comparable within one load generator and CPU model.
+    env.DB.prepare(
+      `SELECT cpu_model, cpu_score_method AS method, COUNT(*) AS runs,
+              ROUND(AVG(cpu_score), 1) AS avg_score, ROUND(MIN(cpu_score), 1) AS min_score,
+              ROUND(MAX(cpu_temp_peak_c), 1) AS max_temp_c, SUM(thermal_verdict = 'fail') AS thermal_failed
+       FROM reports WHERE created_at >= ? AND cpu_score IS NOT NULL
+       GROUP BY cpu_model, cpu_score_method ORDER BY runs DESC LIMIT 50`,
+    ).bind(since),
   ]);
   return json({
     since,
@@ -253,6 +261,7 @@ async function stats(request, env) {
     by_gpu_model: byGpu.results,
     problem_checks: topChecks.results,
     per_day: perDay.results,
+    cpu_bench: cpuBench.results,
   });
 }
 

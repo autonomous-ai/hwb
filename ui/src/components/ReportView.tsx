@@ -12,11 +12,12 @@ import {
   verdict,
 } from "../format";
 import type { CheckResult, Row, Status } from "../types";
+import { BenchPanel } from "./Bench";
 import { KV, Value } from "./Data";
 import { Card, DriverFacts, InstallPlan, Inventory } from "./Sections";
 import { TabPanel, Tabs, type TabItem } from "./Tabs";
 
-const KNOWN_SECTIONS = new Set(["inventory", "gpu_facts", "install_plan"]);
+const KNOWN_SECTIONS = new Set(["inventory", "gpu_facts", "install_plan", "bench"]);
 const ALL = () => new Set<Status>(STATUSES);
 
 export type Go = (view: string, tab: string, check?: string) => void;
@@ -398,6 +399,7 @@ export function ReportView({
   const inv = sections.inventory as Row | undefined;
   const facts = sections.gpu_facts as Row | undefined;
   const plan = sections.install_plan as Row | undefined;
+  const bench = sections.bench as Row | undefined;
   const invGpus = ((inv?.gpus as Row | undefined)?.gpus ?? []) as unknown[];
   const dryRun = results.some((r) => r.name.startsWith("install.") && r.status === "skip");
   const other = Object.entries(sections).filter(([k]) => !KNOWN_SECTIONS.has(k));
@@ -418,6 +420,7 @@ export function ReportView({
   const tabs: TabItem[] = [
     { id: "summary", label: "Summary" },
     ...(results.length ? [{ id: "checks", label: <>Checks <span className="count">{results.length}</span></> }] : []),
+    ...(bench ? [{ id: "bench", label: "Benchmarks" }] : []),
     ...(inv ? [{ id: "inventory", label: "Inventory" }] : []),
     ...(facts ? [{ id: "driver", label: "GPU driver" }] : []),
     ...(plan ? [{ id: "plan", label: "Install plan" }] : []),
@@ -458,6 +461,7 @@ export function ReportView({
           "checks",
           <ChecksPanel view={view} active={active} setActive={setActive} query={query} setQuery={setQuery} focus={check} />,
         )}
+      {bench && panel("bench", <BenchPanel bench={bench} runId={view.id} />)}
       {inv && panel("inventory", <Inventory inv={inv} />)}
       {facts && panel("driver", <DriverFacts facts={facts} showSmi={invGpus.length === 0} />)}
       {plan && panel("plan", <InstallPlan plan={plan} dryRun={dryRun} />)}

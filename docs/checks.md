@@ -1,6 +1,6 @@
-# `hwb detect` check reference
+# Driver check reference (`hwb info`)
 
-`detect` first reads the machine (sysfs, procfs, `nvidia-smi`, `ldconfig`, `nvcc`, `journalctl`), then judges what it found. Each check below says what it verifies and what to do when it doesn't pass.
+`hwb info` (the default command) first reads the machine (sysfs, procfs, `nvidia-smi`, `ldconfig`, `nvcc`, `journalctl`), then judges what it found. Each check below says what it verifies and what to do when it doesn't pass.
 
 | check | verifies | not PASS → do this |
 |---|---|---|

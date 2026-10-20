@@ -129,12 +129,13 @@ jobs:
           set -euo pipefail
           python3 --version
           python3 dist/hwb.pyz --version
-          python3 dist/hwb.pyz --out runs info
           python3 dist/hwb.pyz --out runs install driver   # dry run: must plan without root/changes
-          # No GPU in CI: detect must report FAIL (exit 1), never crash (exit 2).
-          set +e; python3 dist/hwb.pyz --out runs detect; rc=$?; set -e
-          test "$rc" -eq 1 || { echo "detect exited $rc, expected 1"; exit 1; }
+          # No GPU in CI: the default command (info) must report FAIL (exit 1), never crash (exit 2).
+          set +e; python3 dist/hwb.pyz --out runs; rc=$?; set -e
+          test "$rc" -eq 1 || { echo "hwb exited $rc, expected 1"; exit 1; }
+          # A short CPU benchmark with the stdlib load fallback (no stress-ng in the image).
+          HWB_GATEWAY=off python3 dist/hwb.pyz --out runs bench cpu --duration 3 --interval 0.5
           if grep -h '"status": "error"' runs/*/report.json; then echo "ERROR results found"; exit 1; fi
-          # One combined viewer for all three runs above.
+          # One combined viewer for all the runs above.
           test "$(find runs -name report.html | wc -l)" -eq 1
           grep -q '<script id="hwb-report" type="application/json">{"runs": \[' runs/report.html

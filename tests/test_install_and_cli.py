@@ -39,8 +39,8 @@ def test_unknown_distro_rejected() -> None:
         tools_plan(OSInfo("fedora", (), "40", "Fedora", "6.9", "x86_64"))
 
 
-def test_cli_detect_writes_report_even_off_linux(tmp_path: Path) -> None:
-    code = main(["--out", str(tmp_path), "detect"])
+def test_default_command_checks_and_collects_even_off_linux(tmp_path: Path) -> None:
+    code = main(["--out", str(tmp_path)])
     (run_dir,) = (p for p in tmp_path.iterdir() if p.is_dir())
     report = json.loads((run_dir / "report.json").read_text())
     assert report["exit_code"] == code

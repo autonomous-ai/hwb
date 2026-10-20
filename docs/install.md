@@ -27,16 +27,35 @@ Optional tools make some results richer. hwb works without them and marks the af
 
 ---
 
-## Method 1 — download a release (recommended)
+## Method 1 — install a release (recommended)
 
-Every tagged release on [GitHub Releases](https://github.com/autonomous-ai/hwb/releases) ships `hwb.pyz` (the single-file bundle), a wheel, an sdist, and `SHA256SUMS`.
+One command downloads the latest release, verifies it against the release's `SHA256SUMS`, and installs it as an executable `hwb`:
+
+```bash
+curl -fsSL https://github.com/autonomous-ai/hwb/releases/latest/download/install.sh | sudo sh     # -> /usr/local/bin/hwb
+curl -fsSL https://github.com/autonomous-ai/hwb/releases/latest/download/install.sh | sh          # -> ~/.local/bin/hwb, no root
+
+sudo hwb        # driver checks + inventory
+```
+
+The installer is a short POSIX `sh` script that ships with every release. Read it first if you like: `curl -fsSL …/install.sh | less`.
+- **Prerequisites:** only `python3` ≥ 3.10. It downloads with `curl`, `wget`, or `python3` itself when neither is installed.
+- **Safe to re-run:** running it again re-installs or updates in place.
+- **Options**, set as environment variables (put them after `sudo` so they reach the script, e.g. `| sudo HWB_VERSION=v0.4.0 sh`):
+
+| variable | default | meaning |
+|---|---|---|
+| `HWB_VERSION` | `latest` | release tag to install, e.g. `v0.4.0` |
+| `HWB_INSTALL_DIR` | `/usr/local/bin` as root, else `~/.local/bin` | where `hwb` goes |
+| `HWB_BASE_URL` | the GitHub release | a mirror or local directory (`file:///path`) holding `hwb.pyz` and `SHA256SUMS` |
+
+Prefer to do it by hand? `hwb` is just the release's `hwb.pyz` with the executable bit set:
 
 ```bash
 curl -fsSLO https://github.com/autonomous-ai/hwb/releases/latest/download/hwb.pyz
 curl -fsSLO https://github.com/autonomous-ai/hwb/releases/latest/download/SHA256SUMS
 sha256sum --check --ignore-missing SHA256SUMS
-
-sudo python3 hwb.pyz        # driver checks + inventory
+sudo install -m 0755 hwb.pyz /usr/local/bin/hwb      # or just run: sudo python3 hwb.pyz
 ```
 
 Every release asset also carries a signed build-provenance attestation. To confirm a file was built by this repo's release workflow:
@@ -45,7 +64,21 @@ Every release asset also carries a signed build-provenance attestation. To confi
 gh attestation verify hwb.pyz --repo autonomous-ai/hwb
 ```
 
-Pin a specific version by replacing `latest/download` with `download/v0.3.0`.
+### Updating
+
+```bash
+hwb update                 # installed vs latest version; changes nothing
+sudo hwb update --apply    # download, verify SHA256, test-run, replace /usr/local/bin/hwb in place
+```
+
+**Update check:** after an interactive run, hwb looks up the latest release at most once a day.
+- It's a 2-second HEAD request to GitHub's `/releases/latest`; nothing about the machine is sent.
+- The result is cached in `~/.cache/hwb/update-check.json` (or `$HWB_HOME`).
+- When a newer release exists, it prints one line with the command to update.
+- Offline rigs never see an error.
+- `HWB_NO_UPDATE_CHECK=1` turns the check off.
+
+Running the installer again works too. `hwb update` only applies to the release install: a pip/uv install or a source checkout is updated the way it was installed.
 
 ## Method 1b — build the bundle yourself
 
@@ -97,9 +130,9 @@ Avoid `sudo pip install` into the system Python. On Debian and Ubuntu it's block
 Some steps need root: `install --apply`, the DIMM details and the Xid scan.
 
 ```bash
+sudo hwb install driver --apply   # release install (method 1): /usr/local/bin is on root's PATH
 sudo python3 hwb.pyz install driver --apply
 sudo ./hwb.sh
-sudo hwb                   # with method 3, only if the uv/pipx bin dir is on root's PATH, which it usually isn't
 ```
 
 With method 3, run as root with the full path: `sudo "$(command -v hwb)"`.
@@ -112,6 +145,7 @@ Output from a root run lands in `./hwb-runs/` and is owned by root. Pass `--out 
 
 ## Uninstall
 
+- Release install: `sudo rm /usr/local/bin/hwb` (or `rm ~/.local/bin/hwb`), and the update-check cache `rm -rf ~/.cache/hwb`
 - Bundle: `rm hwb.pyz`
 - Checkout: `rm -rf hwb/`
 - Tool install: `uv tool uninstall hwb` (or `pipx uninstall hwb`)

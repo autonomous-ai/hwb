@@ -44,7 +44,8 @@ bundle:
 # Everything a release ships: pyz bundle, wheel, sdist, checksums.
 dist: bundle
 	uv build --out-dir dist
-	cd dist && sha256sum hwb.pyz *.whl *.tar.gz > SHA256SUMS 2>/dev/null || shasum -a 256 hwb.pyz *.whl *.tar.gz > SHA256SUMS
+	cp install.sh dist/install.sh
+	cd dist && sha256sum hwb.pyz install.sh *.whl *.tar.gz > SHA256SUMS 2>/dev/null || shasum -a 256 hwb.pyz install.sh *.whl *.tar.gz > SHA256SUMS
 	@cat dist/SHA256SUMS
 
 version:

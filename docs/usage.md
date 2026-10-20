@@ -163,6 +163,19 @@ hwb all [--duration SECONDS] [--interval SECONDS] [--model HF_ID]
 
 Runs `info`, then `bench all`, plus `serve` if `--model` is given. Everything goes into a single run directory and report.
 
+### `update`
+
+```
+hwb update [--apply] [-y]
+```
+
+Shows the installed and the latest release.
+- **`--apply`** installs the newer release over the running `hwb`: download, verify `SHA256SUMS`, test-run the new file, then an atomic rename. It asks first; `-y` skips the prompt, and a non-interactive run needs it.
+- **Permissions:** it needs write access to the file, so use `sudo` for `/usr/local/bin/hwb`.
+- **Other installs:** it only works on the release install (see [installation](install.md#updating)).
+
+Interactive runs of any command also check for a newer release, at most once a day, and print one line when there is one. `HWB_NO_UPDATE_CHECK=1` disables that.
+
 ### `submit`
 
 ```

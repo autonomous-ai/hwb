@@ -14,7 +14,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from types import FrameType
 
-from . import __version__, bench, serve
+from . import __version__, bench, serve, update
 from .core.context import RunContext
 from .core.errors import HwbError
 from .core.log import setup_logging
@@ -124,6 +124,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="write the exact upload to --out and send nothing"
     )
     sb.add_argument("--delete", metavar="ID", help="delete a report you submitted from this --out")
+
+    up = sub.add_parser(
+        "update",
+        help="check for a newer hwb release; --apply installs it over this hwb",
+        description="Show the installed and latest release. With --apply, download the release's "
+        "hwb.pyz, verify it against SHA256SUMS, test-run it and replace this hwb in place "
+        f"(after confirmation). Interactive runs check daily; {update.ENV_NO_CHECK}=1 disables that.",
+    )
+    up.add_argument("--apply", action="store_true", help="install the newer release")
+    up.add_argument("-y", "--yes", action="store_true", help="skip the confirmation prompt")
     return p
 
 
@@ -202,6 +212,30 @@ def _cmd_submit(args: argparse.Namespace) -> int:
         return EXIT_ERROR
 
 
+def _cmd_update(args: argparse.Namespace) -> int:
+    setup_logging(None, verbose=args.verbose)
+    try:
+        return update.self_update(apply=args.apply, assume_yes=args.yes)
+    except KeyboardInterrupt:
+        return EXIT_INTERRUPTED
+    except HwbError as exc:
+        log.error("%s", exc)
+        return EXIT_ERROR
+
+
+def _update_notice() -> None:
+    """After an interactive run: one line if a newer release is out (checked at most daily)."""
+    if not (sys.stdin.isatty() and sys.stderr.isatty()):
+        return
+    try:
+        line = update.notice()
+    except (HwbError, OSError, ValueError) as exc:  # a notice must never break a run
+        log.debug("update notice failed: %s", exc)
+        return
+    if line:
+        print(f"\n{line}", file=sys.stderr)
+
+
 def _offer_submit(out: Path) -> None:
     """After an interactive run, offer to share it (the operator still confirms).
     HWB_GATEWAY=off turns the offer off."""
@@ -222,6 +256,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "submit":  # works on existing runs; must not create a run directory
         return _cmd_submit(args)
+    if args.command == "update":
+        return _cmd_update(args)
     try:
         ctx = RunContext.create(args.out, args.command)
     except OSError as exc:
@@ -255,6 +291,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"view:   {index}  (all runs in {args.out})")
     if code is None:
         _offer_submit(args.out)
+    _update_notice()
     return code if code is not None else ctx.exit_code()
 
 

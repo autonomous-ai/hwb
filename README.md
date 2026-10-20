@@ -30,7 +30,11 @@ sudo hwb install tools --apply    # optional: stress-ng makes CPU scores compara
 sudo hwb bench cpu
 sudo hwb bench thermal --duration 600
 
-# 5. Share the results: sanitized, previewed, confirmed, then a link and a QR code
+# 5. Serve a model and test it: answer checks + load test (tests a running model server if there is one)
+hwb serve --list
+hwb serve
+
+# 6. Share the results: sanitized, previewed, confirmed, then a link and a QR code
 hwb submit
 ```
 
@@ -63,6 +67,7 @@ Interactive runs offer to submit at the end; `HWB_GATEWAY=off` turns that off.
 
 - **[Installation](docs/install.md)**: getting hwb onto a server (bundle, git checkout, pip/uv), prerequisites per distro
 - **[Usage](docs/usage.md)**: every command and flag, the recommended fresh-rig workflow, exit codes, output files
+- **[Serving and testing a model](docs/serve.md)**: `hwb serve` step by step: test a running model, launch a preset, read the results
 - **[Check reference](docs/checks.md)**: what each driver check means and how to fix a FAIL or WARN
 - **[Development](docs/development.md)**: dev setup, tests, adding a check, project rules
 

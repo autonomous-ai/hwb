@@ -100,6 +100,54 @@ function Sensors({ temps }: { temps: Row }) {
   );
 }
 
+const SERVER_COLUMNS: Columns = [
+  ["framework", "Framework"],
+  ["model", "Model"],
+  ["served_name", "Served as"],
+  ["port", "Port"],
+  ["gpus", "GPUs"],
+  ["used_gib", "GPU memory (GiB)"],
+  ["processes", "Processes"],
+];
+const PROCESS_COLUMNS: Columns = [
+  ["gpu", "GPU"],
+  ["pid", "PID"],
+  ["process", "Process"],
+  ["used_mib", "Memory (MiB)"],
+];
+
+function Workloads({ data }: { data: Row }) {
+  const servers = rows(data.servers).map((s): Row => ({
+    ...s,
+    gpus: Array.isArray(s.gpus) ? (s.gpus as unknown[]).join(", ") : s.gpus,
+    serving: s.serving,
+  }));
+  const procs = rows(data.processes);
+  if (!servers.length && !procs.length) return <p className="muted">GPUs idle: no compute processes.</p>;
+  return (
+    <>
+      {servers.length > 0 && <Table rows={servers} columns={SERVER_COLUMNS} />}
+      {servers.some((s) => s.serving) && (
+        <p className="muted small">
+          Serving (from each server's /v1/models):{" "}
+          {servers
+            .filter((s) => s.serving)
+            .map((s) => `${String(s.framework)} :${String(s.port)} → ${((s.serving as Row).ids as string[] | undefined)?.join(", ") ?? "?"}`)
+            .join("; ")}
+        </p>
+      )}
+      {procs.length > 0 && (
+        <details className="data">
+          <summary>{procs.length} GPU process(es)</summary>
+          <div className="data-body">
+            <Table rows={procs} columns={PROCESS_COLUMNS} />
+          </div>
+        </details>
+      )}
+    </>
+  );
+}
+
 const DISK_COLUMNS: Columns = [
   ["name", "Device"],
   ["model", "Model"],
@@ -144,6 +192,11 @@ export function Inventory({ inv }: { inv: Row }) {
           <p className="muted">{gpus.error}</p>
         </Card>
       ) : null}
+      {typeof inv.workloads === "object" && inv.workloads !== null && (
+        <Card wide title="Models on the GPUs">
+          <Workloads data={obj(inv.workloads)} />
+        </Card>
+      )}
       {dimms.length > 0 && (
         <Card wide title={`Memory modules (${dimms.length})`}>
           <Table rows={dimms} />

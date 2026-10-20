@@ -7,7 +7,7 @@ Run hwb on a freshly racked NVIDIA GPU server (Xeon or Threadripper/EPYC with RT
 
 1. **Is the GPU driver stack healthy, and what hardware is in the box?** (`hwb`)
 2. **Does it perform and stay cool under sustained load?** (`hwb bench cpu`, `hwb bench thermal`)
-3. **Does a real model serve?** (`hwb serve`, work in progress)
+3. **Does a real model serve correctly and fast?** (`hwb serve`)
 
 The only thing hwb needs on the server is `python3` 3.10 or newer. Nothing is installed into the system Python, and nothing on the system changes unless you pass `--apply`.
 
@@ -76,5 +76,6 @@ Interactive runs offer to submit at the end; `HWB_GATEWAY=off` turns that off.
 | `bench cpu`, `bench thermal` | ✅ load (stress-ng or built-in fallback) with a time series of CPU and GPU temperature, utilisation, clocks and power; charts in the report |
 | `monitor` | ✅ the same time series and judgements as the benchmarks, recorded while the machine runs its own workload; includes GPU PCIe links (generation while busy, width, error counters, replays) |
 | `bench memory\|disk\|gpu` | 🚧 reports SKIP "not implemented yet" |
-| `serve` (vLLM) | 🚧 reports SKIP "not implemented yet" |
+| `serve` | ✅ vLLM presets per hardware (2× RTX PRO 6000 Blackwell: DeepSeek V4 Flash, Qwen 3.5/3.6/3.8, GLM 4.5 Air/4.7 Flash), or `--endpoint` for a running server; answer checks + load test (tokens/s, time to first token, time per token) with GPU sampling |
+| `info`: models on the GPUs | ✅ running model servers (vLLM, SGLang, llama.cpp, Ollama, TGI, Triton) with model, port, GPUs and memory; `serve` tests them instead of launching another |
 | `submit` | ✅ sanitized upload to the public gateway, link and QR code, delete token |

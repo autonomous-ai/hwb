@@ -85,12 +85,46 @@ def build_parser() -> argparse.ArgumentParser:
         help="sampling interval (s)",
     )
 
-    s = sub.add_parser("serve", help="host a real model with vLLM and load-test it")
-    s.add_argument("--model", default=serve.DEFAULT_MODEL)
-    s.add_argument("--tp", type=int, help="tensor parallel size (default: all GPUs)")
-    s.add_argument("--port", type=int, default=8000)
+    s = sub.add_parser(
+        "serve",
+        help="host a model with vLLM (a preset for this hardware) or test a running server",
+        description="Launch vLLM with a preset matched to the detected GPUs (or --endpoint to test a "
+        "server you already run), check its answers (arithmetic, JSON, code, long-context recall, tool "
+        "call), then load-test it over several concurrency levels while recording GPU temperature, "
+        "power, clocks and PCIe links. vLLM is always stopped afterwards.",
+    )
+    s.add_argument(
+        "--list", action="store_true", help="list the presets and which fit this machine"
+    )
+    s.add_argument("--preset", help="preset name (default: the verified preset for this hardware)")
+    s.add_argument(
+        "--endpoint", metavar="URL", help="test this running OpenAI-compatible server instead"
+    )
+    s.add_argument("--model", help="model name at --endpoint (default: the first one it serves)")
+    s.add_argument(
+        "--port", type=int, default=8000, help="port for the launched vLLM (default 8000)"
+    )
+    s.add_argument(
+        "--concurrency", default="1,4,16", help="load levels, comma-separated (default 1,4,16)"
+    )
+    s.add_argument(
+        "--requests", type=int, default=4, help="requests per level, times its concurrency"
+    )
+    s.add_argument("--max-tokens", type=int, default=256, help="output tokens per load request")
+    s.add_argument(
+        "--ready-timeout", type=int, default=3600, help="seconds to wait for vLLM to load"
+    )
+    s.add_argument("--interval", type=float, default=1.0, help="sampling interval (s)")
+    s.add_argument("--vllm", metavar="PATH", help="vllm executable to use")
+    s.add_argument(
+        "--install-vllm",
+        action="store_true",
+        help=f"install {serve.presets.VLLM_SPEC} into an isolated uv venv under $HWB_HOME",
+    )
+    s.add_argument("--dry-run", action="store_true", help="print the vllm command and stop")
+    s.add_argument("--force", action="store_true", help="run a preset meant for other hardware")
 
-    a = sub.add_parser("all", help="info + all benchmarks (+ serve with --model)")
+    a = sub.add_parser("all", help="info + all benchmarks (+ serve with --preset)")
     a.add_argument("--duration", type=int, default=60, help="seconds of load per benchmark")
     a.add_argument(
         "--interval",
@@ -98,7 +132,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=bench.BenchOptions().interval_s,
         help="sampling interval (s)",
     )
-    a.add_argument("--model", help="also run the vLLM test with this model")
+    a.add_argument("--preset", help="also run hwb serve with this preset")
 
     sb = sub.add_parser(
         "submit",
@@ -162,15 +196,53 @@ def _cmd_monitor(ctx: RunContext, args: argparse.Namespace) -> None:
     bench.monitor.run(ctx, bench.BenchOptions(duration_s=args.duration, interval_s=args.interval))
 
 
+def _serve_options(args: argparse.Namespace) -> serve.ServeOptions:
+    try:
+        levels = tuple(int(c) for c in args.concurrency.split(",") if c.strip())
+    except ValueError:
+        raise HwbError(
+            f"--concurrency must be numbers like 1,4,16, not {args.concurrency!r}"
+        ) from None
+    return serve.ServeOptions(
+        preset=args.preset,
+        endpoint=args.endpoint,
+        model=args.model,
+        port=args.port,
+        ready_timeout_s=args.ready_timeout,
+        concurrency=levels or (1,),
+        requests_per_level=args.requests,
+        max_tokens=args.max_tokens,
+        interval_s=args.interval,
+        vllm=args.vllm,
+        install_vllm=args.install_vllm,
+        dry_run=args.dry_run,
+        force=args.force,
+    )
+
+
 def _cmd_serve(ctx: RunContext, args: argparse.Namespace) -> None:
-    serve.run(ctx, serve.ServeOptions(model=args.model, tensor_parallel=args.tp, port=args.port))
+    serve.run(ctx, _serve_options(args))
+
+
+def _serve_list() -> int:
+    hw = serve.presets.matching_hardware(serve.detected_gpus())
+    print(f"This machine: {hw.label if hw else 'no preset hardware profile matches'}\n")
+    print(f"{'preset':<28} {'fits':<5} {'status':<9} {'weights':>8}  {'quant':<26} model")
+    for p in serve.presets.PRESETS:
+        fits = "yes" if hw and p.hardware == hw.id else "-"
+        star = " (default)" if p.default else ""
+        print(
+            f"{p.name:<28} {fits:<5} {p.status:<9} {p.weights_gb:>6.0f}GB  {p.quant:<26} {p.model}{star}"
+        )
+    print("\nhwb serve --preset NAME [--dry-run]   or   hwb serve --endpoint http://host:8000")
+    return 0
 
 
 def _cmd_all(ctx: RunContext, args: argparse.Namespace) -> None:
     _cmd_info(ctx, args)
     bench.run(ctx, "all", bench.BenchOptions(duration_s=args.duration, interval_s=args.interval))
-    if args.model:
-        serve.run(ctx, serve.ServeOptions(model=args.model))
+    if args.preset:
+        serve.run(ctx, serve.ServeOptions(preset=args.preset))
 
 
 COMMANDS: dict[str, Callable[[RunContext, argparse.Namespace], None]] = {
@@ -258,6 +330,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _cmd_submit(args)
     if args.command == "update":
         return _cmd_update(args)
+    if args.command == "serve" and args.list:  # informational: no run directory
+        return _serve_list()
     try:
         ctx = RunContext.create(args.out, args.command)
     except OSError as exc:

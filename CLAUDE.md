@@ -34,7 +34,9 @@ gateway/               Cloudflare Worker (JS): R2 report store, D1 analysis tabl
                        client.py (urllib upload/delete, terminal QR), command.py (preview + confirm flow)
   metrics/sampler.py   background time series while benchmarks run; CSV + downsampled report copy
   bench/               cpu + thermal (load.py: stress-ng or stdlib workers; analysis.py: pure judging); memory/disk/gpu pending
-  serve/               vLLM smoke and load test: interface only so far
+  serve/               presets.py (vLLM launch presets per hardware, data only), suite.py (answer checks + load sweep),
+                       client.py (stdlib streaming OpenAI client with timings), __init__.py (launch/endpoint, teardown)
+  metrics/workloads.py what already runs on the GPUs (process -> server walk; never stores command lines)
 ```
 
 ## Hard rules
@@ -85,5 +87,5 @@ Output goes to `hwb-runs/<UTC-timestamp>-<host>-<command>/{report.json,report.md
 - [x] `metrics/sampler.py`: background time series (procfs/hwmon/RAPL + nvidia-smi `-lms`) to CSV and the report
 - [x] `bench cpu` (stress-ng or stdlib fallback) and `bench thermal`: phases, time series, charts in the viewer; `bench memory|disk` via stress-ng / sysbench / fio still open
 - [ ] `bench gpu`: torch payload in a uv venv: GEMM TFLOPS per dtype, memory bandwidth, H2D/D2H, P2P, NCCL all-reduce
-- [ ] `serve`: uv venv with vllm, `vllm serve` with TP across GPUs, health wait, `vllm bench serve`, guaranteed teardown
+- [x] `serve`: presets per hardware, uv venv with vllm (`--install-vllm`), health wait, answer checks + load sweep, guaranteed teardown; `--endpoint` for running servers. Mark presets verified after a real run
 - [ ] offline bundle: `.pyz` + uv binary + wheelhouse for air-gapped rigs

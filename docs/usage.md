@@ -59,6 +59,10 @@ Read-only. First the GPU driver and CUDA health checks (see the [check reference
 - **network:** physical NICs, link state, speed, driver
 - **sensors:** all hwmon temperatures
 - **gpus:** nvidia-smi inventory
+- **workloads:** what's already running on the GPUs.
+  - Each GPU process is traced to the model server that started it (vLLM, SGLang, llama.cpp, Ollama, TGI, Triton), giving its model, served name, port, GPUs and memory.
+  - Each server's own `/v1/models` on localhost is asked what it serves.
+  - Full command lines are never stored, because they can contain API keys; local model paths are reduced to their last part.
 
 Serial numbers, MAC addresses and IPs are deliberately not collected.
 
@@ -143,25 +147,65 @@ Records the same time series as the benchmarks (CPU and GPU temperature, utilisa
 
 Use it for problems that only show under real jobs after a while. Example: a customer reports GPUs dropping a PCIe generation after some time (Gen5 → Gen4 on Blackwell cards, Gen4 → Gen3 on Ampere/Ada). Run `sudo hwb monitor --duration 3600` during their workload. If a busy GPU's link drops a generation while its error count rises and temperatures climb, that's a marginal PCIe channel (riser, retimer, slot, contacts) losing margin as the chassis warms. CPU throttling itself doesn't change link speed.
 
-### `serve` 🚧
+### `serve`
 
 ```
-hwb serve [--model HF_ID] [--tp N] [--port 8000]
+hwb serve --list
+hwb serve [--preset NAME] [--dry-run] [--install-vllm | --vllm PATH] [--force]
+hwb serve --endpoint http://host:8000 [--model NAME] [--preset NAME]
+          [--concurrency 1,4,16] [--requests 4] [--max-tokens 256] [--ready-timeout 3600]
 ```
 
-Not implemented yet: it reports SKIP. Planned behavior:
-1. Install vLLM into an isolated venv.
-2. Serve `--model` with tensor parallelism across `--tp` GPUs (default: all of them).
-3. Run a load test and record throughput, TTFT and inter-token latency.
-4. Always shut the server down afterwards.
+Hosts a real model with vLLM, or tests one that's already running, and measures it:
+
+1. **Answer checks**, run with reasoning off and temperature 0. They catch a server that's up but wrong: bad quantization, the wrong chat template, a missing tool-call or reasoning parser.
+   - arithmetic (`17 × 23`);
+   - JSON-only output;
+   - writing a Python function;
+   - recalling a code hidden in a ~6000-word context;
+   - a tool call (`get_weather("Hanoi")`), which only passes when the tool-call parser is set up.
+2. **Load test** at each `--concurrency` level, sending `--requests × concurrency` distinct streaming requests with a fixed output length (`--max-tokens`, forced with vLLM's `ignore_eos`). It records:
+   - output tokens/s in total and per request;
+   - time to first token (p50/p90/p99);
+   - time per output token;
+   - the longest pause between chunks;
+   - errors.
+3. **Sampling throughout:** the sampler records GPU temperature, power, clocks and PCIe links for both phases. The Benchmarks tab shows the checks, a table per concurrency level and the charts.
+
+**What it launches:**
+- `--endpoint URL` tests that server and starts nothing.
+- Otherwise hwb first looks for a model server already running on the GPUs (see `info`). If it finds one and no `--preset` was given, **it tests that one rather than launching another**.
+- To launch, it picks the preset for the detected hardware, or the one named with `--preset`. It starts `vllm serve` in its own process group on `127.0.0.1`, waits for `/health` (`--ready-timeout`), tests it, and **always stops it** afterwards.
+- If other processes hold some GPUs, it launches on the free ones (`CUDA_VISIBLE_DEVICES`, numbered as in `nvidia-smi`). It refuses only when too few GPUs are free.
+- `--dry-run` prints the exact command and stops.
+
+**vLLM** comes from `--vllm PATH`, then `$HWB_HOME/venvs/vllm`, then `PATH`. `--install-vllm` creates that venv with uv (the pinned version, plus extras such as `b12x` for Blackwell kernels). Nothing is installed into the system or core Python. Hugging Face downloads use `HF_TOKEN` if it's set; the presets' models are public, so it's optional. `HWB_LLM_API_KEY` is sent as a Bearer token to servers that require one.
+
+**Presets** (`hwb serve --list`) are per hardware profile:
+- **"verified"** means the exact command ran on that hardware.
+- **"untested"** means it was derived from the model card, the weight size and vLLM's source.
+
+The presets for **2× RTX PRO 6000 Blackwell** (2 × 96 GB, sm_120):
+
+| preset | model | weights | status |
+|---|---|---|---|
+| `deepseek-v4-flash-vision` (default) | deepseek-ai/DeepSeek-V4-Flash-Vision-Exp @ `6821d6a` | 168 GB fp8 + fp4 experts | verified |
+| `deepseek-v4-flash` | deepseek-ai/DeepSeek-V4-Flash-0731 | 167 GB | untested |
+| `qwen3.5-122b-a10b-nvfp4` | nvidia/Qwen3.5-122B-A10B-NVFP4 | 84 GB | untested |
+| `qwen3.8-flash-next-nvfp4` | nvidia/Qwen3.8-Flash-Next-NVFP4 | 133 GB | untested |
+| `qwen3.6-35b-a3b-fp8` | Qwen/Qwen3.6-35B-A3B-FP8 (one copy per GPU) | 38 GB | untested |
+| `glm-4.5-air-fp8` | zai-org/GLM-4.5-Air-FP8 | 113 GB | untested |
+| `glm-4.7-flash` | zai-org/GLM-4.7-Flash | 62 GB bf16 | untested |
+
+Models that don't fit 192 GB with room for KV cache are left out: GLM-5.x (≥ 204 GB even as NVFP4), Qwen3-235B FP8, DeepSeek V4.1/V4-Pro. Presets live in `src/hwb/serve/presets.py`. When an untested one has run cleanly on the hardware, mark it verified.
 
 ### `all`
 
 ```
-hwb all [--duration SECONDS] [--interval SECONDS] [--model HF_ID]
+hwb all [--duration SECONDS] [--interval SECONDS] [--preset NAME]
 ```
 
-Runs `info`, then `bench all`, plus `serve` if `--model` is given. Everything goes into a single run directory and report.
+Runs `info`, then `bench all`, plus `serve` with that preset if `--preset` is given. Everything goes into a single run directory and report.
 
 ### `update`
 

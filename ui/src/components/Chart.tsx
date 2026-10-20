@@ -26,7 +26,9 @@ const HEIGHT = 210;
 // Same right margin on every chart so side-by-side time axes line up (room for end labels).
 const M = { top: 22, bottom: 26, left: 46, right: 96 };
 // Smallest y span per unit, so sensor noise (95.2 vs 95.4 °C) never fills the whole height.
-const MIN_SPAN: Record<string, number> = { "°C": 20, MHz: 500, W: 50, "": 4 };
+const MIN_SPAN: Record<string, number> = { "°C": 20, MHz: 500, W: 50, "": 4, errors: 5 };
+// Discrete states (link generation, cumulative counters) are drawn as steps, not slopes.
+const STEPPED = new Set(["gen", "errors"]);
 const FALLBACK_WIDTH = 720;
 
 export function fmtTime(s: number): string {
@@ -44,6 +46,10 @@ function niceStep(span: number, target: number): number {
 /** Nice y domain and ticks; percentages are pinned to 0-100. */
 export function yScale(values: number[], unit: string, extra: number[] = []): { lo: number; hi: number; ticks: number[] } {
   if (unit === "%") return { lo: 0, hi: 100, ticks: [0, 25, 50, 75, 100] };
+  if (unit === "gen") {
+    const hi = Math.max(4, ...values.map(Math.ceil));
+    return { lo: 0, hi, ticks: Array.from({ length: hi + 1 }, (_, i) => i) };
+  }
   const all = [...values, ...extra];
   let lo = Math.min(...all);
   let hi = Math.max(...all);
@@ -65,12 +71,14 @@ export function yScale(values: number[], unit: string, extra: number[] = []): { 
 }
 
 function fmtValue(v: number, unit: string): string {
+  if (unit === "gen") return `Gen ${v}`;
+  if (unit === "errors") return `${v} errors`;
   const digits = Math.abs(v) >= 100 || unit === "MHz" ? 0 : 1;
   return `${v.toFixed(digits)}${unit ? (unit === "%" ? "%" : ` ${unit}`) : ""}`;
 }
 
-/** Path segments, broken wherever a sample is missing. */
-function path(values: (number | null)[], x: (i: number) => number, y: (v: number) => number): string {
+/** Path segments, broken wherever a sample is missing; ``step`` holds each value until the next. */
+function path(values: (number | null)[], x: (i: number) => number, y: (v: number) => number, step = false): string {
   let d = "";
   let pen = false;
   values.forEach((v, i) => {
@@ -78,6 +86,7 @@ function path(values: (number | null)[], x: (i: number) => number, y: (v: number
       pen = false;
       return;
     }
+    if (pen && step) d += `H${x(i).toFixed(1)}`;
     d += `${pen ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`;
     pen = true;
   });
@@ -206,7 +215,7 @@ export function LineChart({
             <g key={v}>
               <line x1={M.left} x2={M.left + plotW} y1={y(v)} y2={y(v)} className="grid" />
               <text x={M.left - 6} y={y(v) + 4} className="tick" textAnchor="end">
-                {v}
+                {unit === "gen" ? (v ? `Gen${v}` : "") : v}
               </text>
             </g>
           ))}
@@ -224,7 +233,7 @@ export function LineChart({
             </g>
           )}
           {lines.map((l) => (
-            <path key={l.key} d={path(l.values, x, y)} stroke={l.color} className="line" />
+            <path key={l.key} d={path(l.values, x, y, STEPPED.has(unit))} stroke={l.color} className="line" />
           ))}
           {ends.map((e) => (
             <text key={e.l.key} x={M.left + plotW + 8} y={e.y + 4} className="end-label">

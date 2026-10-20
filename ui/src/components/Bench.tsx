@@ -25,8 +25,15 @@ interface Timeseries {
   csv?: string[];
 }
 
-const ORDER = ["cpu", "thermal", "memory", "disk", "gpu"];
-const TITLES: Record<string, string> = { cpu: "CPU", thermal: "Thermal", memory: "Memory", disk: "Disk", gpu: "GPU" };
+const ORDER = ["monitor", "cpu", "thermal", "memory", "disk", "gpu"];
+const TITLES: Record<string, string> = {
+  monitor: "Monitor",
+  cpu: "CPU",
+  thermal: "Thermal",
+  memory: "Memory",
+  disk: "Disk",
+  gpu: "GPU",
+};
 
 // One chart per (domain, quantity): never two units on one axis, never more than 8 lines.
 const CHARTS: { title: string; match: (k: string) => boolean; limit?: boolean }[] = [
@@ -39,6 +46,8 @@ const CHARTS: { title: string; match: (k: string) => boolean; limit?: boolean }[
   { title: "GPU utilization", match: (k) => /^gpu\d+\.util$/.test(k) },
   { title: "GPU power", match: (k) => /^gpu\d+\.power$/.test(k) },
   { title: "GPU SM clock", match: (k) => /^gpu\d+\.sm_mhz$/.test(k) },
+  { title: "GPU PCIe link generation", match: (k) => /^gpu\d+\.pcie_gen$/.test(k) },
+  { title: "PCIe correctable errors (since start)", match: (k) => /^gpu\d+\.pcie_errors$/.test(k) },
 ];
 
 /** Colour follows the entity: CPU (and its first sensor) slot 1, further sockets the next
@@ -82,6 +91,52 @@ function Tiles({ items }: { items: [string, string | null, string?][] }) {
   );
 }
 
+function PcieTable({ pcie }: { pcie: unknown }) {
+  if (!pcie || typeof pcie !== "object" || !Object.keys(pcie).length) return null;
+  const rows = Object.entries(pcie as Record<string, Row>);
+  const val = (v: unknown, prefix = "") => (v === null || v === undefined ? <Dash /> : `${prefix}${String(v)}`);
+  return (
+    <div className="table-wrap">
+      <table className="pcie-table">
+        <caption>GPU PCIe links</caption>
+        <thead>
+          <tr>
+            <th>GPU</th>
+            <th>Address</th>
+            <th>Upstream port</th>
+            <th className="num">Max</th>
+            <th className="num">Narrowest</th>
+            <th className="num">Correctable errors</th>
+            <th className="num">Uncorrectable</th>
+            <th className="num">Replays</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(([gpu, p]) => {
+            const narrowed = num(p.min_width) !== null && num(p.max_width) !== null && num(p.min_width)! < num(p.max_width)!;
+            return (
+              <tr key={gpu}>
+                <td>GPU{gpu}</td>
+                <td>
+                  <code>{String(p.addr ?? "?")}</code>
+                </td>
+                <td>{p.upstream ? <code>{String(p.upstream)}</code> : <Dash />}</td>
+                <td className="num">
+                  {val(p.max_gen, "Gen")} x{String(p.max_width ?? "?")}
+                </td>
+                <td className={`num${narrowed ? " bad" : ""}`}>{val(p.min_width, "x")}</td>
+                <td className={`num${num(p.correctable_errors) ? " bad" : ""}`}>{val(p.correctable_errors)}</td>
+                <td className={`num${num(p.uncorrectable_errors) ? " bad" : ""}`}>{val(p.uncorrectable_errors)}</td>
+                <td className={`num${num(p.replays) ? " bad" : ""}`}>{val(p.replays)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function headline(kind: string, b: Row): ReactNode {
   if (kind === "cpu") {
     const method = b.method === "stress-ng" ? "stress-ng matrixprod" : "Python fallback (install stress-ng)";
@@ -95,6 +150,19 @@ function headline(kind: string, b: Row): ReactNode {
           ["Peak CPU temp", fmt(b.cpu_temp_peak_c, 0, " °C")],
           ["Package power", fmt(b.load_power_w, 0, " W"), "average under load"],
           ["Load generator", method],
+        ]}
+      />
+    );
+  }
+  if (kind === "monitor") {
+    return (
+      <Tiles
+        items={[
+          ["Recorded", fmt(b.seconds, 0, " s"), b.interrupted ? "stopped early" : undefined],
+          ["CPU busy", fmt(b.cpu_util_pct, 0, "%"), "average"],
+          ["Peak CPU temp", fmt(b.cpu_temp_peak_c, 0, " °C"), num(b.cpu_crit_c) ? `limit ${fmt(b.cpu_crit_c)} °C` : undefined],
+          ["Package power", fmt(b.load_power_w, 0, " W"), "average"],
+          ["Throttle events", b.cpu_throttle_events === null || b.cpu_throttle_events === undefined ? null : String(b.cpu_throttle_events)],
         ]}
       />
     );
@@ -218,8 +286,8 @@ export function Charts({ ts }: { ts: Timeseries }) {
 
 function BenchCard({ kind, b, runId }: { kind: string; b: Row; runId: string }) {
   const ts = b.timeseries as Timeseries | undefined;
-  const { timeseries: _ts, phases, findings, ...rest } = b;
-  const known = kind === "cpu" || kind === "thermal";
+  const { timeseries: _ts, phases, findings, pcie, ...rest } = b;
+  const known = kind === "cpu" || kind === "thermal" || kind === "monitor";
   const gpusWatched = ts?.series?.some((s) => s.key.startsWith("gpu"));
   return (
     <section className="bench" aria-label={`${TITLES[kind] ?? kind} benchmark`}>
@@ -236,6 +304,12 @@ function BenchCard({ kind, b, runId }: { kind: string; b: Row; runId: string }) 
       {kind === "thermal" && gpusWatched && (
         <p className="muted small">GPUs are monitored here, not loaded; GPU load comes with bench gpu.</p>
       )}
+      {kind === "monitor" && (
+        <p className="muted small">
+          Recorded while the machine ran its own workload; hwb added no load. A GPU link below its max generation only counts
+          while that GPU is busy: idle GPUs lower it on purpose.
+        </p>
+      )}
       {ts && <Charts ts={ts} />}
       {ts && (
         <p className="muted small">
@@ -245,6 +319,7 @@ function BenchCard({ kind, b, runId }: { kind: string; b: Row; runId: string }) 
           Full resolution: {(ts.csv ?? []).join(", ") || "CSV files"} in the run directory.
         </p>
       )}
+      <PcieTable pcie={pcie} />
       <PhaseTable phases={phases} />
     </section>
   );

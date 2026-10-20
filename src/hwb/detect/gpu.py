@@ -26,6 +26,9 @@ from ..core.result import CheckResult, Status
 log = logging.getLogger(__name__)
 
 NVIDIA_VENDOR = "0x10de"
+# Drivers that hand a GPU to a VM (PCI passthrough). Such GPUs are accepted: the host's
+# nvidia driver doesn't own them, and their driver stack lives inside the guest.
+PASSTHROUGH_DRIVERS = frozenset({"vfio-pci", "pci-stub"})
 # Blackwell (sm_100/sm_120, e.g. RTX 5090) requires the open kernel modules and >= R570.
 MIN_BLACKWELL_DRIVER = (570,)
 _DRIVER_RE = re.compile(r"Kernel Module(?: for \S+)?\s+(\d+\.\d+(?:\.\d+)?)")
@@ -62,6 +65,19 @@ class GpuFacts:
     libcuda: str | None = None
     nvcc_version: str | None = None
     xid_lines: list[str] | None = None
+
+    @property
+    def passthrough(self) -> list[PciGpu]:
+        return [g for g in self.pci if g.driver in PASSTHROUGH_DRIVERS]
+
+    @property
+    def host_gpus(self) -> list[PciGpu]:
+        """GPUs the host driver should own: everything not passed through to a VM."""
+        return [g for g in self.pci if g.driver not in PASSTHROUGH_DRIVERS]
+
+    @property
+    def all_passed_through(self) -> bool:
+        return bool(self.pci) and not self.host_gpus
 
 
 def version_tuple(v: str) -> tuple[int, ...]:
@@ -188,6 +204,29 @@ def gather() -> GpuFacts:
 
 # ---------------------------------------------------------------- checks
 
+Check = Callable[[GpuFacts], CheckResult]
+
+
+def _passthrough_note(f: GpuFacts) -> str:
+    drivers = ", ".join(sorted({g.driver or "?" for g in f.passthrough}))
+    return f"{len(f.passthrough)} passed through to VMs ({drivers})"
+
+
+def needs_host_driver(chk: Check) -> Check:
+    """SKIP a host driver check when every GPU is passed through to VMs."""
+
+    @functools.wraps(chk)
+    def wrapper(f: GpuFacts) -> CheckResult:
+        if f.all_passed_through:
+            return CheckResult(
+                f"gpu.{chk.__name__.removeprefix('check_')}",
+                Status.SKIP,
+                f"all {len(f.pci)} GPUs are passed through to VMs; the driver stack lives in the guests",
+            )
+        return chk(f)
+
+    return wrapper
+
 
 def check_pci(f: GpuFacts) -> CheckResult:
     if not f.pci:
@@ -200,7 +239,8 @@ def check_pci(f: GpuFacts) -> CheckResult:
     return CheckResult(
         "gpu.pci",
         Status.PASS,
-        f"{len(f.pci)} NVIDIA GPU(s) on PCI bus",
+        f"{len(f.pci)} NVIDIA GPU(s) on PCI bus"
+        + (f", {_passthrough_note(f)}" if f.passthrough else ""),
         data={"devices": [dataclasses.asdict(g) for g in f.pci]},
     )
 
@@ -216,6 +256,7 @@ def check_nouveau(f: GpuFacts) -> CheckResult:
     return CheckResult("gpu.nouveau", Status.PASS, "nouveau not loaded")
 
 
+@needs_host_driver
 def check_kernel_module(f: GpuFacts) -> CheckResult:
     if "nvidia" not in f.modules or f.kernel_driver is None:
         return CheckResult(
@@ -236,18 +277,27 @@ def check_kernel_module(f: GpuFacts) -> CheckResult:
 def check_bound(f: GpuFacts) -> CheckResult:
     if not f.pci:
         return CheckResult("gpu.bound", Status.SKIP, "no GPUs on PCI bus")
-    unbound = [g.address for g in f.pci if g.driver != "nvidia"]
+    drivers = {g.address: g.driver for g in f.pci}
+    unbound = [g.address for g in f.host_gpus if g.driver != "nvidia"]
     if unbound:
         return CheckResult(
             "gpu.bound",
             Status.FAIL,
-            f"{len(unbound)} GPU(s) not bound to the nvidia driver: {', '.join(unbound)}",
-            data={"drivers": {g.address: g.driver for g in f.pci}},
+            f"{len(unbound)} GPU(s) bound to neither nvidia nor a VM: {', '.join(unbound)}",
+            data={"drivers": drivers},
             hint="check dmesg for NVRM errors (unsupported GPU for this driver branch?)",
+        )
+    if f.passthrough:
+        return CheckResult(
+            "gpu.bound",
+            Status.PASS,
+            f"{len(f.host_gpus)} bound to nvidia, {_passthrough_note(f)}",
+            data={"drivers": drivers},
         )
     return CheckResult("gpu.bound", Status.PASS, "all GPUs bound to nvidia")
 
 
+@needs_host_driver
 def check_secure_boot(f: GpuFacts) -> CheckResult:
     if f.secure_boot is None:
         return CheckResult("gpu.secure_boot", Status.SKIP, "Secure Boot state unknown")
@@ -263,6 +313,7 @@ def check_secure_boot(f: GpuFacts) -> CheckResult:
     return CheckResult("gpu.secure_boot", Status.PASS, "Secure Boot enabled; module signed")
 
 
+@needs_host_driver
 def check_headers(f: GpuFacts) -> CheckResult:
     if f.headers_present:
         return CheckResult("gpu.kernel_headers", Status.PASS, "headers for running kernel present")
@@ -274,6 +325,7 @@ def check_headers(f: GpuFacts) -> CheckResult:
     )
 
 
+@needs_host_driver
 def check_nvidia_smi(f: GpuFacts) -> CheckResult:
     if f.smi_rows is None:
         return CheckResult(
@@ -284,11 +336,13 @@ def check_nvidia_smi(f: GpuFacts) -> CheckResult:
         )
     names = [r.get("name") or "?" for r in f.smi_rows]
     data = {"gpus": f.smi_rows, "cuda_driver_api": f.cuda_driver_api}
-    if f.pci and len(f.smi_rows) != len(f.pci):
+    host = f.host_gpus
+    if f.pci and len(f.smi_rows) != len(host):
+        scope = f"host GPUs ({_passthrough_note(f)})" if f.passthrough else "PCI GPUs"
         return CheckResult(
             "gpu.nvidia_smi",
             Status.FAIL,
-            f"nvidia-smi sees {len(f.smi_rows)} of {len(f.pci)} PCI GPUs",
+            f"nvidia-smi sees {len(f.smi_rows)} of {len(host)} {scope}",
             data=data,
             hint="a GPU failed to initialise; check dmesg for 'fallen off the bus' / Xid 79",
         )
@@ -300,6 +354,7 @@ def check_nvidia_smi(f: GpuFacts) -> CheckResult:
     )
 
 
+@needs_host_driver
 def check_blackwell(f: GpuFacts) -> CheckResult:
     rows = f.smi_rows or []
     bw = [
@@ -321,6 +376,7 @@ def check_blackwell(f: GpuFacts) -> CheckResult:
     )
 
 
+@needs_host_driver
 def check_pcie_link(f: GpuFacts) -> CheckResult:
     if not f.smi_rows:
         return CheckResult("gpu.pcie_link", Status.SKIP, "nvidia-smi unavailable")
@@ -339,6 +395,7 @@ def check_pcie_link(f: GpuFacts) -> CheckResult:
     return CheckResult("gpu.pcie_link", Status.PASS, "PCIe link width at max on all GPUs")
 
 
+@needs_host_driver
 def check_persistence(f: GpuFacts) -> CheckResult:
     if not f.smi_rows:
         return CheckResult("gpu.persistence", Status.SKIP, "nvidia-smi unavailable")
@@ -353,6 +410,7 @@ def check_persistence(f: GpuFacts) -> CheckResult:
     return CheckResult("gpu.persistence", Status.PASS, "persistence mode on")
 
 
+@needs_host_driver
 def check_libcuda(f: GpuFacts) -> CheckResult:
     if f.libcuda:
         return CheckResult("gpu.libcuda", Status.PASS, f"libcuda.so.1 at {f.libcuda}")
@@ -364,6 +422,7 @@ def check_libcuda(f: GpuFacts) -> CheckResult:
     )
 
 
+@needs_host_driver
 def check_cuda_toolkit(f: GpuFacts) -> CheckResult:
     if f.nvcc_version is None:
         return CheckResult(
@@ -395,7 +454,7 @@ def check_xid(f: GpuFacts) -> CheckResult:
     return CheckResult("gpu.xid", Status.PASS, "no Xid events this boot")
 
 
-CHECKS: tuple[Callable[[GpuFacts], CheckResult], ...] = (
+CHECKS: tuple[Check, ...] = (
     check_pci,
     check_nouveau,
     check_kernel_module,

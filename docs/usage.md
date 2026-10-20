@@ -119,7 +119,29 @@ Every sample goes to `bench-<kind>.csv` and `bench-<kind>-gpu.csv` in the run di
 
 Load comes from `stress-ng --cpu-method matrixprod` when it is installed (`hwb install tools`). Without it, a stdlib fallback runs one busy Python process per thread: the results are still valid for temperatures and stability, but the scores only compare with other fallback runs. All load processes run in their own process group and are always stopped, including on Ctrl-C. `thermal` monitors GPUs but doesn't load them; GPU load comes with `bench gpu`.
 
+**GPU PCIe links** are recorded too, for each GPU the host driver owns:
+- **Link state:** the generation and width the kernel negotiated (`current_link_speed`/`width` in sysfs, with `nvidia-smi` as a fallback).
+- **Error counters:** the kernel's PCIe error counts (AER) for the GPU and for its upstream port.
+- **Replays:** the GPU's packet-retransmission count from `nvidia-smi -q`.
+
+Judged after the run:
+- **WARN** when a link runs below its maximum generation *while that GPU is busy* (≥ 50% utilisation). Idle GPUs drop to Gen1 on purpose, so that's ignored.
+- **WARN** when a link narrows, or correctable errors or replays rise.
+- **FAIL** on uncorrectable errors.
+
+The Benchmarks tab adds a link-generation chart, an error chart and a per-GPU table with the address, upstream port and counters.
+
 **Run benchmarks on an otherwise idle machine.** Other workloads compete for the CPUs and heat them, which skews both the scores and the temperatures.
+
+### `monitor`
+
+```
+hwb monitor [--duration SECONDS] [--interval SECONDS]
+```
+
+Records the same time series as the benchmarks (CPU and GPU temperature, utilisation, clocks, power, GPU PCIe links) for `--duration` seconds (default 600) **without adding any load**, while the machine runs its own workload. It applies the same temperature-limit, throttling, GPU-slowdown and PCIe judgements. Ctrl-C stops early and keeps what was recorded.
+
+Use it for problems that only show under real jobs after a while. Example: a customer reports GPUs dropping from Gen4 to Gen3 after some time. Run `sudo hwb monitor --duration 3600` during their workload. If a busy GPU's link drops a generation while its error count rises and temperatures climb, that's a marginal PCIe channel (riser, retimer, slot, contacts) losing margin as the chassis warms. CPU throttling itself doesn't change link speed.
 
 ### `serve` 🚧
 

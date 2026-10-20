@@ -95,8 +95,8 @@ def test_misc_probes(tmp_path: Path) -> None:
 def test_gpu_csv_parsing() -> None:
     wall0 = time.mktime(time.strptime("2026/10/20 07:00:00", "%Y/%m/%d %H:%M:%S"))
     text = (
-        "0, 2026/10/20 07:00:01.500, 98, 77, 560.12, 2610, 30000, 0x0000000000000000\n"
-        "1, 2026/10/20 07:00:01.501, 97, 89, 575.00, 2400, 30000, 0x0000000000000044\n"
+        "0, 2026/10/20 07:00:01.500, 98, 77, 560.12, 2610, 30000, 4, 16, 0x0000000000000000\n"
+        "1, 2026/10/20 07:00:01.501, 97, 89, 575.00, 2400, 30000, 3, 16, 0x0000000000000044\n"
         "garbage line\n"
     )
     rows = sm.parse_gpu_csv(text, wall0)
@@ -105,6 +105,11 @@ def test_gpu_csv_parsing() -> None:
         ("1", 89.0, 1.5),
     ]
     assert rows[1]["reasons"] & sm.GPU_SLOWDOWN and rows[1]["reasons"] & sm.GPU_POWER_CAP
+    assert (rows[0]["pcie_gen"], rows[1]["pcie_gen"]) == (4.0, 3.0)
+    # A driver without the optional fields: parse with the reduced field list.
+    old = tuple(f for f in sm.GPU_FIELDS if f not in sm.OPTIONAL_GPU_FIELDS)
+    (row,) = sm.parse_gpu_csv("0, 2026/10/20 07:00:01.500, 98, 77, 560, 2610, 30000\n", wall0, old)
+    assert row["pcie_gen"] is None and row["reasons"] is None
 
 
 def test_report_form_downsamples_and_keeps_peaks() -> None:

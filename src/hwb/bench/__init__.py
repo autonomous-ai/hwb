@@ -16,10 +16,10 @@ from collections.abc import Callable
 from ..core.context import RunContext
 from ..core.log import fields
 from ..core.result import CheckResult, Status
-from . import cpu, thermal
+from . import cpu, monitor, thermal
 from .options import BenchOptions
 
-__all__ = ["KINDS", "BenchOptions", "run"]
+__all__ = ["KINDS", "BenchOptions", "monitor", "run"]
 
 log = logging.getLogger(__name__)
 

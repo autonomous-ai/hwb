@@ -1,10 +1,9 @@
 name: Deploy gateway
 
-# Manual: Actions -> Deploy gateway -> Run workflow. Needs repository secrets
-#   CLOUDFLARE_API_TOKEN   (Workers Scripts:Edit, D1:Edit, R2:Edit for the account)
-#   CLOUDFLARE_ACCOUNT_ID
-#   HWB_D1_DATABASE_ID     (from `wrangler d1 create hwb-reports`)
-# UPLOAD_TOKEN / ADMIN_TOKEN are Worker secrets set once with `wrangler secret put`.
+# Manual redeploy (releases deploy automatically, see release.yml). Needs the repository secret
+#   CLOUDFLARE_API_TOKEN   (Workers Scripts:Edit, D1:Edit, R2:Edit on the account in wrangler.toml)
+# The account id and D1 database id are committed in gateway/wrangler.toml. Worker secrets
+# (ADMIN_TOKEN, RATE_LIMIT_SALT, optional UPLOAD_TOKEN) are set once with `wrangler secret put`.
 on:
   workflow_dispatch:
 
@@ -36,13 +35,6 @@ jobs:
           cache: npm
           cache-dependency-path: gateway/package-lock.json
       - run: npm ci
-      - name: Point wrangler.toml at the real D1 database
-        env:
-          DB_ID: ${{ secrets.HWB_D1_DATABASE_ID }}
-        run: |
-          test -n "$DB_ID" || { echo "::error::HWB_D1_DATABASE_ID secret is not set"; exit 1; }
-          sed -i "s/^database_id = .*/database_id = \"$DB_ID\"/" wrangler.toml
       - run: npm run deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

@@ -14,27 +14,29 @@ The only thing hwb needs on the server is `python3` 3.10 or newer. Nothing is in
 ## Quick start
 
 ```bash
-# 1. Get the single-file release onto the server
-curl -fsSLO https://github.com/autonomous-ai/hwb/releases/latest/download/hwb.pyz
+# 1. Install the latest release as /usr/local/bin/hwb (checksum-verified; needs only python3 >= 3.10)
+curl -fsSL https://github.com/autonomous-ai/hwb/releases/latest/download/install.sh | sudo sh
 
 # 2. Check the driver stack and collect the inventory (read-only; root adds DIMMs, Xid scan, CPU power)
-sudo python3 hwb.pyz
+sudo hwb
 
 # 3. No driver yet, or driver checks FAIL? Review the plan, apply it, reboot, check again
-python3 hwb.pyz install driver
-sudo python3 hwb.pyz install driver --apply && sudo reboot
-sudo python3 hwb.pyz
+hwb install driver
+sudo hwb install driver --apply && sudo reboot
+sudo hwb
 
 # 4. Benchmark on an otherwise idle machine
-sudo python3 hwb.pyz install tools --apply    # optional: stress-ng makes CPU scores comparable
-sudo python3 hwb.pyz bench cpu
-sudo python3 hwb.pyz bench thermal --duration 600
+sudo hwb install tools --apply    # optional: stress-ng makes CPU scores comparable
+sudo hwb bench cpu
+sudo hwb bench thermal --duration 600
 
 # 5. Share the results: sanitized, previewed, confirmed, then a link and a QR code
-python3 hwb.pyz submit
+hwb submit
 ```
 
-Or run steps 2 and 4 in one go: `sudo python3 hwb.pyz all --duration 600`.
+Or run steps 2 and 4 in one go: `sudo hwb all --duration 600`. Without sudo, the installer puts `hwb` in `~/.local/bin` instead.
+
+**Updates:** when a newer release is out, interactive runs say so (checked at most once a day; `HWB_NO_UPDATE_CHECK=1` turns it off). `sudo hwb update --apply` downloads it, verifies the checksum, test-runs it and replaces `hwb` in place.
 
 Open **`./hwb-runs/report.html`**: one self-contained page for every run in that folder. It works offline, so you can attach it to a ticket or send it to the vendor.
 - **Overview tab:** merges all runs into the latest result of each check, with one verdict for the rig.

@@ -47,8 +47,9 @@ GitHub Actions workflows live in `.github/workflows/`:
 
 | workflow | trigger | what it does |
 |---|---|---|
-| `ci.yml` | push to `main`, every PR | ruff + mypy, pytest on Python 3.10–3.13, `make dist`, then a **smoke test** of `hwb.pyz` on the stock Python of `ubuntu:22.04`, `ubuntu:24.04`, `debian:12` and `archlinux` (runs `info`, a dry-run `install driver`, and `detect`, which must exit 1 with no GPU and must not exit 2) |
-| `release.yml` | push of a `v*` tag | reruns CI, checks the tag matches the package version, builds `hwb.pyz`, the wheel, the sdist and `SHA256SUMS`, attests build provenance, and creates the GitHub Release with auto-generated notes. Tags like `v1.0.0-rc1` become pre-releases |
+| `ci.yml` | push to `main`, every PR | ruff + mypy, pytest on Python 3.10–3.13, `make dist`, then a **smoke test** of `hwb.pyz` on the stock Python of `ubuntu:22.04`, `ubuntu:24.04`, `debian:12` and `archlinux` (runs the default `info`, which must exit 1 with no GPU and never 2, a dry-run `install driver`, a short `bench cpu`, and `install.sh` from the built assets) |
+| `release.yml` | push of a `v*` tag | reruns CI, checks the tag matches the package version, builds `hwb.pyz`, `install.sh`, the wheel, the sdist and `SHA256SUMS`, attests build provenance, and creates the GitHub Release with auto-generated notes. Tags like `v1.0.0-rc1` become pre-releases. Then **deploys the gateway** (it embeds the viewer), if the repository secret `CLOUDFLARE_API_TOKEN` is set |
+| `gateway-deploy.yml` | manual | runs CI, then redeploys the gateway (same secret) |
 
 Dependabot (`.github/dependabot.yml`) bumps action versions weekly and dev tools monthly.
 
@@ -62,7 +63,7 @@ To cut a release:
 git tag v0.2.0 && git push origin v0.2.0
 ```
 
-If the tag and the versions disagree, the release job fails before it publishes anything. To build release artifacts locally, run `make dist`, which produces `dist/` with the same files.
+If the tag and the versions disagree, the release job fails before it publishes anything. Installed copies see the new release through `hwb update` and the daily update check, which read where GitHub's `/releases/latest` redirects to. To build release artifacts locally, run `make dist`, which produces `dist/` with the same files.
 
 Optional hardening in the repo settings:
 - Add required reviewers to the `release` environment so publishing needs an approval.

@@ -81,7 +81,7 @@ npx wrangler secret put UPLOAD_TOKEN        # optional, see above
 npm run deploy                              # embeds the viewer, applies D1 migrations, deploys
 ```
 
-Or from GitHub: **Actions → Deploy gateway**. It needs the repository secrets `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` and `HWB_D1_DATABASE_ID`. It runs the full CI first.
+**Every hwb release redeploys the gateway** (release.yml), since the gateway embeds the report viewer. **Actions → Deploy gateway** redeploys by hand. Both need one repository secret: `CLOUDFLARE_API_TOKEN`, with Workers Scripts, D1 and R2 edit on the account. The account id and D1 database id are committed in `wrangler.toml`. Without the secret, the release job only leaves a notice.
 
 Rigs need no setup: `hwb submit` (or the prompt after any interactive run) uses the built-in `DEFAULT_GATEWAY`. A self-hosted gateway is selected with `HWB_GATEWAY=https://…`. If you change the public URL, update `DEFAULT_GATEWAY` in `src/hwb/share/client.py` before the next release.
 

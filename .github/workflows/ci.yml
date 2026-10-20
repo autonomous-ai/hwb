@@ -136,6 +136,9 @@ jobs:
           # A short CPU benchmark with the stdlib load fallback (no stress-ng in the image).
           HWB_GATEWAY=off python3 dist/hwb.pyz --out runs bench cpu --duration 3 --interval 0.5
           if grep -h '"status": "error"' runs/*/report.json; then echo "ERROR results found"; exit 1; fi
+          # The installer, from the built release assets (file://: no network in the test).
+          HWB_BASE_URL="file://$PWD/dist" HWB_INSTALL_DIR="$PWD/bin" sh dist/install.sh
+          test "$(./bin/hwb --version)" = "hwb $(python3 dist/hwb.pyz --version | cut -d' ' -f2)"
           # One combined viewer for all the runs above.
           test "$(find runs -name report.html | wc -l)" -eq 1
           grep -q '<script id="hwb-report" type="application/json">{"runs": \[' runs/report.html

@@ -37,7 +37,12 @@ function leaky() {
   const r = clone(healthy);
   r.results[0].summary = `owner admin@corp.example.com on 10.20.30.40 / fe80::1ff:fe23:4567:890a nic 00:1a:2b:3c:4d:5e`;
   r.results[1].hint = "see /home/alice/hwb-runs/x/hwb.log.jsonl on gpu-rig-01";
-  r.results[2].data = { gpu: "GPU-12345678-1234-1234-1234-123456789abc", serial: "PHX123", nested: { mac: "aa:bb" } };
+  r.results[2].data = {
+    gpu: "GPU-12345678-1234-1234-1234-123456789abc",
+    serial: "PHX123",
+    gpu_serial: "1652724012345",
+    nested: { mac: "aa:bb" },
+  };
   return r;
 }
 
@@ -117,6 +122,7 @@ describe("upload", () => {
     expect(text).not.toContain("python3");
     expect(text).toContain("NVRM: Xid (PCI:0000:41:00): 13, pid=[pid], name=[process], Graphics Exception");
     expect(text).not.toContain("PHX123");
+    expect(text).toContain('"gpu_serial":"1652724012345"'); // kept on purpose: tracks the card
     expect(text).toContain("~/hwb-runs/x/hwb.log.jsonl");
     for (const keep of ["00000000:41:00.0", "0000:41:00.0", "580.65.06", "12.0"]) expect(text).toContain(keep);
     expect(body.redactions).toMatchObject({ email: 1, ipv4: 1, ipv6: 1, mac: 1, gpu_uuid: 1, home_path: 1, "key:serial": 1 });

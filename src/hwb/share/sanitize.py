@@ -1,7 +1,8 @@
 """Strip anything identifying from reports before they leave the machine.
 
 Reports may be viewed by anyone holding the link, so a submission carries no host names,
-addresses, serials, unit UUIDs, user paths or process names. The gateway applies the same
+addresses, unit UUIDs, user paths or process names, and no serials except the GPU's own
+(`gpu_serial`), which is kept on purpose to track a card across slots and reports. The gateway applies the same
 generic rules again (gateway/src/sanitize.js): keep the two in sync. This side also knows
 the real host name and home directory, which the server never sees.
 """
@@ -20,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 # Keys dropped wherever they appear: they identify a unit, a network endpoint or a person.
+# "gpu_serial" is deliberately absent: the card's serial is needed to track it across reports.
 DROP_KEYS = frozenset(
     {
         "uuid",

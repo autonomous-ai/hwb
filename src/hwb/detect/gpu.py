@@ -428,7 +428,8 @@ def check_pcie_link(f: GpuFacts) -> CheckResult:
     narrow, capped, errors, notes = [], [], [], []
     bios = degraded = trained = False
     for r in f.smi_rows:
-        gpu = f"GPU{r.get('index')}"
+        # the index follows the slot (bus order); the serial names the card, so swaps can be traced
+        gpu = f"GPU{r.get('index')}" + (f" (SN {r['gpu_serial']})" if r.get("gpu_serial") else "")
         cur, mx = _int(r.get("pcie.link.width.current")), _int(r.get("pcie.link.width.max"))
         if cur and mx and cur < mx:
             narrow.append(f"{gpu} x{cur}/x{mx}")

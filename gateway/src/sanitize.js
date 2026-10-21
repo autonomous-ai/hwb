@@ -6,6 +6,7 @@
 import { sha256Hex } from "./util.js";
 
 // Keys dropped wherever they appear: they identify a unit, a network endpoint or a person.
+// "gpu_serial" is deliberately absent: the card's serial is needed to track it across reports.
 export const DROP_KEYS = new Set([
   "uuid",
   "serial",

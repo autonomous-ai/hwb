@@ -13,6 +13,7 @@ GPU_FIELDS = (
     "index",
     "name",
     "uuid",
+    "serial",
     "pci.bus_id",
     "driver_version",
     "memory.total",
@@ -24,6 +25,10 @@ GPU_FIELDS = (
     "temperature.gpu",
     "power.limit",
 )
+
+# nvidia-smi field -> report key. A card's serial stays in shared reports (the sanitizers drop
+# a plain "serial" key): it tells which physical card sat in a slot across reports and swaps.
+_KEYS = {"serial": "gpu_serial"}
 
 _NA = {"", "N/A", "[N/A]", "[Not Supported]", "Not Supported"}
 _CUDA_RE = re.compile(r"CUDA Version:\s*([\d.]+)")
@@ -44,7 +49,7 @@ def parse_csv(text: str, fieldnames: tuple[str, ...]) -> list[Row]:
             raise NvidiaSmiError(f"unexpected nvidia-smi row ({len(raw)} cols): {raw!r}")
         rows.append(
             {
-                k: (None if v.strip() in _NA else v.strip())
+                _KEYS.get(k, k): (None if v.strip() in _NA else v.strip())
                 for k, v in zip(fieldnames, raw, strict=True)
             }
         )

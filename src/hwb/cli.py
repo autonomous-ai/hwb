@@ -142,8 +142,8 @@ def build_parser() -> argparse.ArgumentParser:
         "submit",
         help="share the runs in --out through an hwb gateway (sanitized, after confirmation)",
         description="Upload the runs in --out to an hwb gateway and print the link and a QR code. "
-        "Host names, addresses, serials, UUIDs and user paths are removed first; you see a "
-        "summary and confirm before anything is sent.",
+        "Host names, addresses, UUIDs, user paths and serials other than the GPUs' are removed "
+        "first; you see a summary and confirm before anything is sent.",
     )
     sb.add_argument(
         "--gateway",

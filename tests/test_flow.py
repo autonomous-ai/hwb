@@ -32,8 +32,8 @@ OPEN_580 = (
 SMI_BANNER = "| NVIDIA-SMI 580.65.06    Driver Version: 580.65.06    CUDA Version: 13.0     |\n"
 # Columns follow nvsmi.GPU_FIELDS. GPU1 sits in an x8 slot and has persistence off.
 SMI_CSV = (
-    "0, NVIDIA GeForce RTX 5090, GPU-00000000-aaaa, 00000000:01:00.0, 580.65.06, 32607, 12.0, Enabled, 5, 16, 16, 34, 575.00\n"
-    "1, NVIDIA GeForce RTX 5090, GPU-00000000-bbbb, 00000000:41:00.0, 580.65.06, 32607, 12.0, Disabled, 5, 8, 16, 71, 575.00\n"
+    "0, NVIDIA GeForce RTX 5090, GPU-00000000-aaaa, [N/A], 00000000:01:00.0, 580.65.06, 32607, 12.0, Enabled, 5, 16, 16, 34, 575.00\n"
+    "1, NVIDIA GeForce RTX 5090, GPU-00000000-bbbb, 1652724012345, 00000000:41:00.0, 580.65.06, 32607, 12.0, Disabled, 5, 8, 16, 71, 575.00\n"
 )
 CPUINFO = "\n\n".join(
     f"processor\t: {i}\nmodel name\t: Intel(R) Xeon(R) Gold 6430\nphysical id\t: {i % 2}\n"

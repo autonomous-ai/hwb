@@ -42,6 +42,7 @@ def _leaky() -> dict[str, Any]:
         "gpu": "GPU-12345678-1234-1234-1234-123456789abc",
     }
     r["sections"]["gpu_facts"]["smi_rows"][0]["uuid"] = "GPU-00000000-aaaa"
+    r["sections"]["gpu_facts"]["smi_rows"][0]["gpu_serial"] = "1652724012345"
     return r
 
 
@@ -75,6 +76,7 @@ def test_sanitize_removes_identifiers_and_keeps_hardware_facts() -> None:
         "580.65.06",
         "NVIDIA GeForce RTX 5090",
         "gpu.pci",
+        '"gpu_serial": "1652724012345"',  # kept on purpose: tracks the card across slots
     ):
         assert kept in text, kept
 

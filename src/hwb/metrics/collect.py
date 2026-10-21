@@ -1,7 +1,8 @@
 """Static hardware inventory: CPU, memory/DIMMs, disks, NICs, board, NUMA, sensors, GPUs.
 
 Each collector is independent; a failing one becomes an ERROR result for that
-section only. Serial numbers are deliberately not collected.
+section only. Serial numbers are deliberately not collected, except each GPU's (from nvidia-smi),
+which tracks a card across slots and reports.
 """
 
 from __future__ import annotations

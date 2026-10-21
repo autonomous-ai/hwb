@@ -11,6 +11,7 @@ import os
 import re
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from http import HTTPStatus
@@ -36,6 +37,11 @@ _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-
 _LOCAL = {"localhost", "127.0.0.1", "::1"}
 _MAX_QR = 177  # modules in a version 40 QR code
 _QUIET = 4  # light border the QR spec asks for
+ENV_QR = "HWB_QR"  # force the terminal QR style: half | full | ascii | off
+QR_STYLES = ("half", "full", "ascii", "off")
+# terminals that draw no (or not reliably) Unicode block characters
+_RGB = {"1": 16, "0": 231}  # 256-color black and white: themes repaint the 16 basic colors
+_PLAIN_TERMS = frozenset({"dumb", "linux", "vt100", "vt102", "vt220", "ansi", "cons25"})
 
 
 class GatewayError(HwbError):
@@ -152,22 +158,65 @@ def delete(base: str, report_id: str, token: str) -> None:
     _request("DELETE", f"{base}/api/reports/{report_id}", token)
 
 
-def render_qr(rows: list[str], *, color: bool) -> str:
-    """Two QR rows per text line using half blocks, with the quiet zone the spec asks for.
+def unicode_terminal(env: Mapping[str, str], encoding: str | None) -> bool:
+    """Can this terminal draw Unicode block characters? Needs UTF-8 output and a UTF-8 locale.
+    Python turns a plain C/POSIX locale into C.UTF-8 by itself (PEP 538), which says nothing
+    about the terminal, so that one does not count."""
+    if (encoding or "").lower().replace("-", "") not in ("utf8", ""):
+        return False
+    if env.get("TERM", "") in _PLAIN_TERMS:
+        return False
+    loc = env.get("LC_ALL") or env.get("LC_CTYPE") or env.get("LANG") or ""
+    if loc == "C.UTF-8" and not env.get("LC_ALL") and env.get("LANG", "C") in ("", "C", "POSIX"):
+        return False
+    return "utf8" in loc.lower().replace("-", "")
 
-    With color, black/white are set explicitly so it scans on any terminal theme. Without,
-    light modules are drawn as blocks, which reads correctly on the usual dark background.
+
+def qr_style(
+    env: Mapping[str, str], encoding: str | None, *, color: bool, size: int, lines: int
+) -> str:
+    """full: every module two colored spaces. Fills whole cells, so it scans on any terminal,
+    theme, font and line spacing, and needs no Unicode (SSH with a C locale, the Linux
+    console, IPMI KVMs); one text line per module row. half: two module rows per line with
+    half blocks, only when the terminal is too short for full and draws Unicode; seams
+    between lines make it harder to scan. ascii: no color either."""
+    forced = env.get(ENV_QR, "").strip().lower()
+    if forced in QR_STYLES:
+        return forced
+    if not color:
+        return "half" if unicode_terminal(env, encoding) else "ascii"
+    if size + 2 * _QUIET + 2 > lines and unicode_terminal(env, encoding):
+        return "half"
+    return "full"
+
+
+def render_qr(rows: list[str], *, color: bool, style: str = "half") -> str:
+    """The QR code with the quiet zone the spec asks for, in one of the QR_STYLES.
+
+    half: two QR rows per text line using half blocks; with color, black/white are set
+    explicitly so it scans on any terminal theme, without, light modules are drawn as blocks,
+    which reads correctly on the usual dark background. full: two background-colored spaces
+    per module, which fill the whole cell on any terminal. ascii: "##" for light modules.
     """
     size = len(rows)
     pad = "0" * (size + 2 * _QUIET)
     grid = [pad] * _QUIET + [f"{'0' * _QUIET}{r}{'0' * _QUIET}" for r in rows] + [pad] * _QUIET
+    if style == "full":
+        # standard colors (40/47): the Linux console has no bright ones
+        return "\n".join(
+            "".join("\033[40m  " if m == "1" else "\033[47m  " for m in row) + "\033[0m"
+            for row in grid
+        )
+    if style == "ascii":
+        return "\n".join("".join("  " if m == "1" else "##" for m in row) for row in grid)
     if len(grid) % 2:
         grid.append(pad)
     lines = []
     for top, bottom in zip(grid[0::2], grid[1::2], strict=True):
         if color:
             cells = (
-                f"\033[{30 if t == '1' else 97};{40 if b == '1' else 107}m▀"
+                # equal halves are a colored space: no glyph, so no seam between lines
+                f"\033[48;5;{_RGB[t]}m " if t == b else f"\033[38;5;{_RGB[t]};48;5;{_RGB[b]}m▀"
                 for t, b in zip(top, bottom, strict=True)
             )
             lines.append("".join(cells) + "\033[0m")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import stat
 import threading
 from collections.abc import Iterator
@@ -116,7 +117,41 @@ def test_qr_rendering_has_quiet_zone_and_two_rows_per_line() -> None:
     assert all(len(line) == 4 + 8 for line in plain)
     assert plain[0] == "█" * 12  # quiet zone is light
     colored = client.render_qr(QR, color=True)
-    assert colored.count("▀") == 12 * 6 and "\033[30;" in colored and colored.endswith("\033[0m")
+    assert colored.splitlines()[0] == "\033[48;5;231m " * 12 + "\033[0m"  # equal halves: no glyph
+    assert "▀" in colored and colored.endswith("\033[0m")
+
+
+def test_full_qr_uses_colored_spaces_only_and_keeps_every_module() -> None:
+    """The style that scans everywhere: no Unicode, one line per module row."""
+    full = client.render_qr(QR, color=True, style="full")
+    assert full.isascii() and len(full.splitlines()) == 4 + 8
+    decoded = [
+        "".join("1" if c == "40" else "0" for c in re.findall(r"\033\[(4[07])m  ", line))
+        for line in full.splitlines()
+    ]
+    assert decoded[4:8] == ["0000" + r + "0000" for r in QR]
+    assert set(decoded[0]) == {"0"}  # quiet zone
+    assert client.render_qr(QR, color=False, style="ascii").splitlines()[0] == "##" * 12
+
+
+def test_qr_style_follows_the_terminal() -> None:
+    utf8 = {"LANG": "en_US.UTF-8", "TERM": "xterm-256color"}
+    tall, short = 80, 24
+    assert client.qr_style(utf8, "utf-8", color=True, size=33, lines=tall) == "full"
+    assert client.qr_style(utf8, "utf-8", color=True, size=33, lines=short) == "half"
+    # ssh into a box with a C locale (Python coerced it), the Linux console: no Unicode
+    coerced = {"LC_CTYPE": "C.UTF-8", "TERM": "xterm"}
+    assert not client.unicode_terminal(coerced, "utf-8")
+    assert client.qr_style(coerced, "utf-8", color=True, size=33, lines=short) == "full"
+    assert (
+        client.qr_style({**utf8, "TERM": "linux"}, "utf-8", color=True, size=33, lines=short)
+        == "full"
+    )
+    assert client.qr_style({}, "ascii", color=False, size=33, lines=tall) == "ascii"
+    assert (
+        client.qr_style({**utf8, "HWB_QR": "off"}, "utf-8", color=True, size=33, lines=tall)
+        == "off"
+    )
 
 
 # ---------------------------------------------------------------- end to end

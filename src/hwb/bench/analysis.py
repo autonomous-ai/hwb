@@ -199,13 +199,15 @@ def pcie_findings(ts: Timeseries) -> list[Finding]:
         gens = ts.values(f"gpu{gpu}.pcie_gen")
         util = ts.values(f"gpu{gpu}.util")
         max_gen, port, target = m.get("max_gen"), m.get("port_max_gen"), m.get("port_target_gen")
+        # a lowered target on a link that took errors is a fallback, not a setting
+        set_low = bool(target and not m.get("errors_since_boot"))
         if max_gen and port and port < max_gen:
             max_gen = port  # an older slot: the card runs at the slot's best, nothing to fix
         busy = [i for i, u in enumerate(util) if u is not None and u >= GPU_BUSY_PCT]
         if max_gen and busy:
             low = [g for i in busy if i < len(gens) and (g := gens[i]) is not None and g < max_gen]
             if low:
-                capped = bool(target and target < max_gen)
+                capped = set_low and target < max_gen
                 findings.append(
                     Finding(
                         "warn",

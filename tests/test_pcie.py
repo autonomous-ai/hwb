@@ -134,7 +134,13 @@ def test_link_limit_reads_card_slot_and_bios(tmp_path: Path) -> None:
     (port / "config").write_bytes(_config(4))  # that the BIOS set to Gen4
     lim = pcie.link_limit(tmp_path, "0000:41:00.0")
     assert (lim.gpu_gen, lim.port_gen, lim.target_gen, lim.slot_gen) == (5, 5, 4, 5)
-    assert lim.bios_capped
+    assert lim.errors == 0 and lim.bios_capped
+    _sysfs(tmp_path, cor=913)  # the same, after the link took errors: a fallback, not a setting
+    (gpu / "max_link_speed").write_text("32.0 GT/s PCIe\n")
+    lim = pcie.link_limit(tmp_path, "0000:41:00.0")
+    assert lim.errors == 913 and lim.target_capped and not lim.bios_capped
+    _sysfs(tmp_path)
+    (gpu / "max_link_speed").write_text("32.0 GT/s PCIe\n")
     (port / "max_link_speed").write_text("16.0 GT/s PCIe\n")  # a Gen4 slot: nothing to fix
     (port / "config").write_bytes(_config(4))
     lim = pcie.link_limit(tmp_path, "0000:41:00.0")
@@ -151,3 +157,10 @@ def test_busy_link_below_max_names_the_bios_setting() -> None:
 
 def test_gen5_card_in_a_gen4_slot_is_fine() -> None:
     assert analysis.pcie_findings(_ts([4, 4], [99, 99], max_gen=5, port_max_gen=4)) == []
+
+
+def test_busy_link_below_max_after_errors_is_not_the_bios() -> None:
+    (f,) = analysis.pcie_findings(
+        _ts([4, 4], [99, 99], max_gen=5, port_max_gen=5, port_target_gen=4, errors_since_boot=913)
+    )
+    assert "BIOS" not in f.text and f.hint == analysis.PCIE_HINT

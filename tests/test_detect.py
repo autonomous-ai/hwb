@@ -91,8 +91,8 @@ def test_pcie_width_degraded_warns() -> None:
     assert "GPU1 x4/x16" in r.summary
 
 
-def _limit(addr: str, gpu: int, port: int, target: int | None) -> LinkLimit:
-    return LinkLimit(addr, gpu, port, target)
+def _limit(addr: str, gpu: int, port: int, target: int | None, errors: int | None = 0) -> LinkLimit:
+    return LinkLimit(addr, gpu, port, target, errors)
 
 
 def test_pcie_generation_capped_in_bios_warns() -> None:
@@ -186,3 +186,19 @@ def test_rtx_pro_6000_blackwell_is_held_to_the_blackwell_rules() -> None:
     assert check_blackwell(ok).status is Status.PASS
     proprietary = GpuFacts(smi_rows=rows, kernel_driver=KernelDriver("580.65.06", False))
     assert check_blackwell(proprietary).status is Status.FAIL
+
+
+def test_pcie_generation_lost_to_link_errors_is_not_blamed_on_the_bios() -> None:
+    """A Gen5 link that took errors and fell back to Gen4: the target reads low too."""
+    rows = [_row(**{"pci.bus_id": "00000000:70:00.0", "pcie.link.gen.max": "4"})]
+    r = check_pcie_link(GpuFacts(smi_rows=rows, pcie_links=[_limit("0000:70:00.0", 5, 5, 4, 913)]))
+    assert r.status is Status.WARN
+    assert r.summary == (
+        "PCIe generation limited: GPU0 Gen4 of Gen5: fell back after link errors; "
+        "correctable PCIe errors since boot: GPU0 913"
+    )
+    assert "BIOS" not in (r.hint or "") and "airflow" in (r.hint or "")
+    # errors alone, link still at its best
+    rows = [_row(**{"pci.bus_id": "00000000:70:00.0", "pcie.link.gen.max": "5"})]
+    r = check_pcie_link(GpuFacts(smi_rows=rows, pcie_links=[_limit("0000:70:00.0", 5, 5, 5, 3)]))
+    assert r.status is Status.WARN and r.summary == "correctable PCIe errors since boot: GPU0 3"

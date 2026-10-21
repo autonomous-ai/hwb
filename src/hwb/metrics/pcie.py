@@ -15,7 +15,9 @@ Idle GPUs lower their link generation to save power; that is normal and judged e
 
 What caps a link below the card's generation is read from the upstream port: its Link
 Capabilities (``max_link_speed``: the slot itself is older) and, as root, its Target Link Speed
-(Link Control 2 in config space: the BIOS limited the slot, often for a riser).
+(Link Control 2 in config space). A lowered target is the BIOS's doing (often set for a riser)
+only on a clean link: a marginal link that took errors falls back too, and then the target can
+read low as well, so the correctable error count since boot decides which it is.
 """
 
 from __future__ import annotations
@@ -130,6 +132,7 @@ class LinkLimit:
     gpu_gen: int | None  # the card's own maximum
     port_gen: int | None  # the upstream port's maximum (the slot)
     target_gen: int | None  # what the port is set to train to (root only)
+    errors: int | None = None  # correctable errors since boot, card + port (AER)
 
     @property
     def slot_gen(self) -> int | None:
@@ -138,9 +141,14 @@ class LinkLimit:
         return min(gens) if gens else None
 
     @property
-    def bios_capped(self) -> bool:
-        """Slot and card both do more than the port is set to: a BIOS (or OS) setting."""
+    def target_capped(self) -> bool:
+        """Slot and card both do more than the port is set to train to."""
         return bool(self.slot_gen and self.target_gen and self.target_gen < self.slot_gen)
+
+    @property
+    def bios_capped(self) -> bool:
+        """A lowered target on a clean link: set that way (BIOS), not a fallback after errors."""
+        return self.target_capped and not self.errors
 
 
 def link_limit(root: Path, addr: str) -> LinkLimit:
@@ -150,11 +158,17 @@ def link_limit(root: Path, addr: str) -> LinkLimit:
     if port:
         with contextlib.suppress(OSError):
             config = (dev / port / "config").read_bytes()
+    counts = [
+        n
+        for a in (addr, port)
+        if a and (n := aer_total(root, a, "aer_dev_correctable")) is not None
+    ]
     return LinkLimit(
         addr,
         link_gen(_read(dev / addr / "max_link_speed")),
         link_gen(_read(dev / port / "max_link_speed")) if port else None,
         target_gen(config),
+        sum(counts) if counts else None,
     )
 
 
@@ -262,6 +276,7 @@ class PcieWatch:
                 "max_gen": g.max_gen,
                 "port_max_gen": g.limit.port_gen,
                 "port_target_gen": g.limit.target_gen,
+                "errors_since_boot": g.limit.errors,
                 "max_width": g.max_width,
                 "min_width": g.worst_width,
                 "correctable_errors": counter_delta(g.base, now, ("aer_dev_correctable",)),

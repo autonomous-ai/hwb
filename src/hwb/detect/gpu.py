@@ -390,60 +390,76 @@ def _int(v: object) -> int | None:
 
 @needs_host_driver
 def check_pcie_link(f: GpuFacts) -> CheckResult:
-    """Width below the card's (wiring, bifurcation, riser) and generation capped below what card
-    and slot can do (a BIOS setting). The current generation drops at idle on purpose, so only
-    the maximum counts here; a link that trains low under load is judged by the benchmarks."""
+    """Width below the card's (wiring, bifurcation, riser), generation capped below what card and
+    slot can do, and correctable errors since boot. A capped generation on a link with errors is
+    a fallback (marginal link), on a clean one a setting (BIOS). The current generation drops at
+    idle on purpose, so only the maximum counts here; a link that trains low under load is judged
+    by the benchmarks and serve."""
     if not f.smi_rows:
         return CheckResult("gpu.pcie_link", Status.SKIP, "nvidia-smi unavailable")
     limits = {lim.addr: lim for lim in f.pcie_links}
-    narrow, capped, notes = [], [], []
-    bios = False
+    narrow, capped, errors, notes = [], [], [], []
+    bios = degraded = False
     for r in f.smi_rows:
         gpu = f"GPU{r.get('index')}"
         cur, mx = _int(r.get("pcie.link.width.current")), _int(r.get("pcie.link.width.max"))
         if cur and mx and cur < mx:
             narrow.append(f"{gpu} x{cur}/x{mx}")
         lim = limits.get(normalize_bus_id(str(r.get("pci.bus_id") or "")))
-        smi_gen = _int(r.get("pcie.link.gen.max"))  # what nvidia-smi says the system allows
+        smi_gen = _int(r.get("pcie.link.gen.max"))  # what nvidia-smi says the system allows now
         if lim is None or not lim.gpu_gen:
             continue
-        if lim.bios_capped:
-            bios = True
-            capped.append(f"{gpu} Gen{lim.target_gen} of Gen{lim.slot_gen}: set in the BIOS")
-        elif lim.port_gen and lim.port_gen < lim.gpu_gen:
+        if lim.errors:
+            errors.append(f"{gpu} {lim.errors}")
+        slot = lim.slot_gen or lim.gpu_gen
+        low = lim.target_gen if lim.target_capped else smi_gen
+        if lim.port_gen and lim.port_gen < lim.gpu_gen:
             notes.append(
                 f"{gpu} Gen{lim.port_gen} card Gen{lim.gpu_gen}: the slot is Gen{lim.port_gen}"
             )
-        elif smi_gen and smi_gen < lim.gpu_gen:
-            capped.append(f"{gpu} Gen{smi_gen} of Gen{lim.gpu_gen}")
+        elif lim.bios_capped:
+            bios = True
+            capped.append(f"{gpu} Gen{lim.target_gen} of Gen{slot}: set in the BIOS")
+        elif low and low < slot and lim.errors:
+            degraded = True
+            capped.append(f"{gpu} Gen{low} of Gen{slot}: fell back after link errors")
+        elif low and low < slot:
+            capped.append(f"{gpu} Gen{low} of Gen{slot}")
     note = f" ({'; '.join(notes)})" if notes else ""
     data = {"links": [dataclasses.asdict(lim) for lim in f.pcie_links]}
-    if narrow or capped:
-        parts = []
-        if narrow:
-            parts.append("PCIe link narrower than supported: " + ", ".join(narrow))
-        if capped:
-            parts.append("PCIe generation limited: " + ", ".join(capped))
-        hints = []
-        if narrow:
-            hints.append("check slot wiring/bifurcation and risers")
-        if bios:
-            hints.append(
-                "set the slot's PCIe link speed to Auto in the BIOS (it was likely lowered for a "
-                "riser), then confirm the link holds it under load without errors (hwb serve)"
-            )
-        elif capped:
-            hints.append(
-                "check the slot's PCIe link speed in the BIOS (Auto) and any riser; run hwb as "
-                "root to read the slot's setting and name the cause"
-            )
+    if not (narrow or capped or errors):
         return CheckResult(
-            "gpu.pcie_link", Status.WARN, "; ".join(parts) + note, data=data, hint="; ".join(hints)
+            "gpu.pcie_link", Status.PASS,
+            "PCIe link width and generation at max on all GPUs" + note, data=data,
+        )  # fmt: skip
+    parts, hints = [], []
+    if narrow:
+        parts.append("PCIe link narrower than supported: " + ", ".join(narrow))
+        hints.append("check slot wiring/bifurcation and risers")
+    if capped:
+        parts.append("PCIe generation limited: " + ", ".join(capped))
+    if errors:
+        parts.append("correctable PCIe errors since boot: " + ", ".join(errors))
+    if degraded or errors:
+        hints.append(
+            "the link is marginal: errors make it fall back a generation, often once it warms up "
+            "(hot air around the slot or CPU, a riser, seating). Check airflow and the CPU cooler, "
+            "reseat card and riser; a cold power-off restores the generation only until it warms "
+            "up again. Record when it drops: hwb monitor"
+        )
+    if bios:
+        hints.append(
+            "set the slot's PCIe link speed to Auto in the BIOS (it was likely lowered for a "
+            "riser), then confirm the link holds it under load without errors (hwb serve)"
+        )
+    elif capped and not degraded:
+        hints.append(
+            "check the slot's PCIe link speed in the BIOS (Auto) and any riser; run hwb as "
+            "root to read the slot's setting and error counters and name the cause"
         )
     return CheckResult(
-        "gpu.pcie_link", Status.PASS, "PCIe link width and generation at max on all GPUs" + note,
-        data=data,
-    )  # fmt: skip
+        "gpu.pcie_link", Status.WARN, "; ".join(parts) + note, data=data, hint="; ".join(hints)
+    )
 
 
 @needs_host_driver

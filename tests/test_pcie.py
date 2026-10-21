@@ -262,3 +262,15 @@ def test_cooling_devices_report_the_thermal_zones_that_drive_them(tmp_path: Path
         "type": "PCIe_Port_Link_Speed_0000:6f:01.0", "cur_state": 4, "max_state": 4, "zones": [],
     }  # fmt: skip
     assert bound["zones"] == ["acpitz"]
+
+
+def test_aer_bit_lines_without_a_severity_header_still_count() -> None:
+    log = (
+        "[    8.3] h kernel: pcieport 0000:6f:01.0:    [ 0] RxErr                  (First)\n"
+        "[    8.3] h kernel: pci 0000:70:00.0:    [13] NonFatalErr\n"
+        "[  204.1] h kernel: pcieport 0000:6f:01.0:    [ 0] RxErr                  (First)\n"
+        "[  205.0] h kernel: pcieport 0000:6f:01.0:    [ 4] DLP                    (First)\n"
+    )
+    k = pcie.parse_kernel_events(log)
+    assert (k["corrected"], k["uncorrected"]) == (3, 1)
+    assert k["error_types"] == {"RxErr": 2, "NonFatalErr": 1, "DLP": 1}

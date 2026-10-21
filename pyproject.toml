@@ -1,6 +1,6 @@
 [project]
 name = "hwb"
-version = "0.8.0"
+version = "0.8.1"
 description = "Acceptance-test toolkit for fresh NVIDIA GPU servers: driver checks, inventory, benchmarks, vLLM smoke test"
 readme = "README.md"
 requires-python = ">=3.10"

@@ -366,3 +366,11 @@ def test_rate_limit_says_when_to_retry(
     _Gateway.status = 429
     assert cli.main(["--out", str(out), "submit", "--gateway", gateway, "--yes"]) == cli.EXIT_ERROR
     assert "(retry in 405 s)" in capsys.readouterr().err
+
+
+def test_short_screens_get_the_narrow_quiet_zone() -> None:
+    assert client.qr_lines(37, "full") == 45 and client.qr_lines(37, "half") == 23
+    assert client.fit_quiet(37, "full", 67) == 4  # 1080p console, 8x16 font
+    assert client.fit_quiet(37, "full", 44) == 2  # 41 lines with a 2-module border
+    full = client.render_qr(QR, color=True, style="full", quiet=2)
+    assert len(full.splitlines()) == 4 + 4

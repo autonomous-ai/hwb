@@ -101,14 +101,22 @@ def submit_runs(
     log.info("submitted report %s", sub.id)
 
     color = sys.stdout.isatty() and "NO_COLOR" not in os.environ
+    lines = shutil.get_terminal_size().lines
     style = client.qr_style(
-        os.environ, sys.stdout.encoding, color=color, size=len(sub.qr),
-        lines=shutil.get_terminal_size().lines,
-    )  # fmt: skip
+        os.environ, sys.stdout.encoding, color=color, size=len(sub.qr), lines=lines
+    )
     print(f"\nReport: {sub.url}\n")
     if style != "off":
-        print(client.render_qr(sub.qr, color=color, style=style))
+        quiet = client.fit_quiet(len(sub.qr), style, lines)
+        print(client.render_qr(sub.qr, color=color, style=style, quiet=quiet))
         print()
+        need = client.qr_lines(len(sub.qr), style, quiet)
+        if sys.stdout.isatty() and need > lines:
+            print(
+                f"The QR code needs {need} lines, this screen has {lines}: its top scrolled away. "
+                "Use a smaller console font (sudo dpkg-reconfigure console-setup, or setfont), "
+                "or open the image link below."
+            )
     print(
         f"QR code as an image: {sub.url}/qr.svg  (if the one above does not scan: {client.ENV_QR}=full)"
     )

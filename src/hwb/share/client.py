@@ -37,6 +37,7 @@ _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-
 _LOCAL = {"localhost", "127.0.0.1", "::1"}
 _MAX_QR = 177  # modules in a version 40 QR code
 _QUIET = 4  # light border the QR spec asks for
+_QUIET_MIN = 2  # what phone scanners still read, when the screen is short (Linux console)
 ENV_QR = "HWB_QR"  # force the terminal QR style: half | full | ascii | off
 QR_STYLES = ("half", "full", "ascii", "off")
 # terminals that draw no (or not reliably) Unicode block characters
@@ -190,7 +191,19 @@ def qr_style(
     return "full"
 
 
-def render_qr(rows: list[str], *, color: bool, style: str = "half") -> str:
+def qr_lines(size: int, style: str, quiet: int = _QUIET) -> int:
+    """Text lines render_qr needs."""
+    modules = size + 2 * quiet
+    return modules if style in ("full", "ascii") else (modules + 1) // 2
+
+
+def fit_quiet(size: int, style: str, lines: int) -> int:
+    """The spec's quiet zone if it fits the screen with room for a line or two, else the
+    narrower one (a Linux console at 1080p with a large font has about 33 lines)."""
+    return _QUIET if qr_lines(size, style) + 2 <= lines else _QUIET_MIN
+
+
+def render_qr(rows: list[str], *, color: bool, style: str = "half", quiet: int = _QUIET) -> str:
     """The QR code with the quiet zone the spec asks for, in one of the QR_STYLES.
 
     half: two QR rows per text line using half blocks; with color, black/white are set
@@ -199,8 +212,8 @@ def render_qr(rows: list[str], *, color: bool, style: str = "half") -> str:
     per module, which fill the whole cell on any terminal. ascii: "##" for light modules.
     """
     size = len(rows)
-    pad = "0" * (size + 2 * _QUIET)
-    grid = [pad] * _QUIET + [f"{'0' * _QUIET}{r}{'0' * _QUIET}" for r in rows] + [pad] * _QUIET
+    pad = "0" * (size + 2 * quiet)
+    grid = [pad] * quiet + [f"{'0' * quiet}{r}{'0' * quiet}" for r in rows] + [pad] * quiet
     if style == "full":
         # standard colors (40/47): the Linux console has no bright ones
         return "\n".join(

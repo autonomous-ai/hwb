@@ -220,9 +220,35 @@ def test_kernel_pcie_errors_warn_with_when_and_where() -> None:
     clean = {**k, "corrected": 0, "lines": 0, "error_types": {}, "devices": {}}
     assert check_pcie_kernel(GpuFacts(kernel_pcie=clean)).status is Status.PASS
     assert check_pcie_kernel(GpuFacts()).status is Status.SKIP
-    cooling = [{"type": "PCIe_Port_Link_Speed_0000:6f:01.0", "cur_state": 1, "max_state": 3}]
-    r = check_pcie_kernel(GpuFacts(kernel_pcie=clean, pcie_cooling=cooling))
-    assert r.status is Status.WARN and "slows a PCIe link (state 1)" in r.summary
+    # an idle link sits in the top cooling state on its own: no thermal zone, no warning
+    idle = {"type": "PCIe_Port_Link_Speed_0000:6f:01.0", "cur_state": 4, "max_state": 4}
+    r = check_pcie_kernel(GpuFacts(kernel_pcie=clean, pcie_cooling=[{**idle, "zones": []}]))
+    assert r.status is Status.PASS
+    assert check_pcie_kernel(GpuFacts(kernel_pcie=clean, pcie_cooling=[idle])).status is Status.PASS
+    bound = [{**idle, "cur_state": 1, "zones": ["acpitz"]}]
+    r = check_pcie_kernel(GpuFacts(kernel_pcie=clean, pcie_cooling=bound, pcie_debug=debug))
+    assert r.status is Status.WARN
+    assert (
+        r.summary
+        == "thermal zone acpitz can slow the PCIe link at GPU port 0000:6f:01.0 (state 1 of 4)"
+    )
+
+
+def test_link_that_trained_low_on_a_full_speed_port_blames_the_path() -> None:
+    rows = [_row(**{"pci.bus_id": "00000000:70:00.0", "pcie.link.gen.max": "4"})]
+    r = check_pcie_link(GpuFacts(smi_rows=rows, pcie_links=[_limit("0000:70:00.0", 5, 5, 5, 0)]))
+    assert r.status is Status.WARN
+    assert r.summary == (
+        "PCIe generation limited: GPU0 Gen4 of Gen5: the slot is set to Gen5 but the link trained lower"
+    )
+    assert "riser" in (r.hint or "") and "run hwb as root" not in (r.hint or "")
+    r = check_pcie_link(
+        GpuFacts(
+            smi_rows=rows, pcie_links=[_limit("0000:70:00.0", 5, 5, 5, 0)],
+            kernel_pcie={"aer_native": False},
+        )
+    )  # fmt: skip
+    assert "cannot see errors" in r.summary
 
 
 def test_bios_cap_is_not_claimed_when_the_firmware_hides_errors() -> None:

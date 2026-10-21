@@ -225,9 +225,18 @@ def debug_snapshot(root: Path, addrs: list[str]) -> list[dict[str, Any]]:
 
 
 def cooling_devices(root: Path) -> list[dict[str, Any]]:
-    """The kernel's PCIe link-speed cooling devices (bwctrl): state > 0 means it slowed a link."""
+    """The kernel's PCIe link-speed cooling devices (bwctrl) and the thermal zones bound to them.
+    cur_state only mirrors the link's current speed (an idle GPU sits at Gen1, the top state):
+    a device can slow a link only when a thermal zone drives it."""
+    thermal = root / "sys/class/thermal"
+    zones: dict[str, list[str]] = {}
+    for z in sorted(thermal.glob("thermal_zone*")):
+        kind = _read(z / "type") or z.name
+        for link in z.glob("cdev[0-9]*"):
+            if link.name.isalnum():  # cdevN, not cdevN_trip_point / cdevN_weight
+                zones.setdefault(link.resolve().name, []).append(kind)
     out = []
-    for d in sorted((root / "sys/class/thermal").glob("cooling_device*")):
+    for d in sorted(thermal.glob("cooling_device*")):
         kind = _read(d / "type") or ""
         if kind.startswith("PCIe_Port_Link_Speed"):
             cur, mx = _read(d / "cur_state"), _read(d / "max_state")
@@ -236,6 +245,7 @@ def cooling_devices(root: Path) -> list[dict[str, Any]]:
                     "type": kind,
                     "cur_state": int(cur) if cur and cur.isdigit() else None,
                     "max_state": int(mx) if mx and mx.isdigit() else None,
+                    "zones": zones.get(d.name, []),
                 }
             )
     return out

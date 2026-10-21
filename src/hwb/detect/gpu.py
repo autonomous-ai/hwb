@@ -426,7 +426,7 @@ def check_pcie_link(f: GpuFacts) -> CheckResult:
     # firmware-first AER: the OS never sees corrected errors, so "no errors" proves nothing
     aer_blind = bool(f.kernel_pcie) and f.kernel_pcie.get("aer_native") is False  # type: ignore[union-attr]
     narrow, capped, errors, notes = [], [], [], []
-    bios = degraded = False
+    bios = degraded = trained = False
     for r in f.smi_rows:
         gpu = f"GPU{r.get('index')}"
         cur, mx = _int(r.get("pcie.link.width.current")), _int(r.get("pcie.link.width.max"))
@@ -455,6 +455,14 @@ def check_pcie_link(f: GpuFacts) -> CheckResult:
         elif low and low < slot and lim.errors:
             degraded = True
             capped.append(f"{gpu} Gen{low} of Gen{slot}: fell back after link errors")
+        elif low and low < slot and lim.target_gen:
+            # the port is set to the full speed (not the BIOS), yet the link came up slower
+            trained = True
+            capped.append(
+                f"{gpu} Gen{low} of Gen{slot}: the slot is set to Gen{lim.target_gen} "
+                "but the link trained lower"
+                + (" (the firmware handles AER, so hwb cannot see errors)" if aer_blind else "")
+            )
         elif low and low < slot:
             capped.append(f"{gpu} Gen{low} of Gen{slot}")
     note = f" ({'; '.join(notes)})" if notes else ""
@@ -484,6 +492,14 @@ def check_pcie_link(f: GpuFacts) -> CheckResult:
             "set the slot's PCIe link speed to Auto in the BIOS (it was likely lowered for a "
             "riser), then confirm the link holds it under load without errors (hwb serve)"
         )
+    elif trained and not degraded:
+        hints.append(
+            "the link could not hold the full speed when it trained (at power-on or after a "
+            "retrain): signal quality on the way to the card, not a setting. Usual suspects: a "
+            "riser or extension cable (length, bends, heat from GPU exhaust), seating, the slot. "
+            "Swap risers or slots between cards to see whether the fault follows the part; a "
+            "riser that cannot run Gen5 reliably can be locked to Gen4 in the BIOS"
+        )
     elif capped and not degraded:
         hints.append(
             "check the slot's PCIe link speed in the BIOS (Auto) and any riser; run hwb as "
@@ -498,7 +514,8 @@ def check_pcie_kernel(f: GpuFacts) -> CheckResult:
     """PCIe trouble the kernel logged this boot (AER errors, link retrains) and kernel cooling
     devices that slowed a PCIe link. Every device counts: a sick NVMe link matters too."""
     k = f.kernel_pcie
-    cooling = [c for c in f.pcie_cooling if c.get("cur_state")]
+    # cur_state just mirrors the link's current speed; only a bound thermal zone can slow it
+    cooling = [c for c in f.pcie_cooling if c.get("zones")]
     if k is None and not cooling:
         return CheckResult("gpu.pcie_kernel", Status.SKIP, "kernel log unreadable (run as root)")
     k = k or {}
@@ -516,8 +533,10 @@ def check_pcie_kernel(f: GpuFacts) -> CheckResult:
             + f", first {k['first_s']:.0f} s after boot, last {k['last_s']:.0f} s"
         )  # fmt: skip
     for c in cooling:
+        port = c["type"].removeprefix("PCIe_Port_Link_Speed_")
         parts.append(
-            f"kernel cooling device {c['type']} slows a PCIe link (state {c['cur_state']})"
+            f"thermal zone {', '.join(c['zones'])} can slow the PCIe link at "
+            f"{gpus.get(port, port)} (state {c['cur_state']} of {c['max_state']})"
         )
     if not parts:
         if k.get("aer_native") is False:
@@ -537,7 +556,8 @@ def check_pcie_kernel(f: GpuFacts) -> CheckResult:
         hint="errors on a GPU link make it fall back a generation: check airflow around the slot "
         "and CPU, reseat card and riser, try another riser; the times since boot show when it "
         "started (compare with hwb monitor)" if errors else
-        "a thermal zone throttles the PCIe link: find the zone bound to it in /sys/class/thermal",
+        "a thermal zone lowers this PCIe link's speed when it gets hot: check that zone's "
+        "temperature and trip points in /sys/class/thermal",
     )  # fmt: skip
 
 

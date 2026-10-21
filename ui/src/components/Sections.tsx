@@ -307,7 +307,8 @@ function KernelPcie({ k, cooling }: { k: Row; cooling: Row[] }) {
   const lines = Array.isArray(k.sample) ? (k.sample as [number, string][]) : [];
   const types = Object.entries(obj(k.error_types)).map(([t, n]) => `${t} ${String(n)}`);
   const devices = Object.entries(obj(k.devices)).map(([d, n]) => `${d} (${String(n)})`);
-  const active = cooling.filter((c) => num(c.cur_state));
+  // cur_state only mirrors the link's current speed; a cooling device acts only when a thermal zone drives it
+  const active = cooling.filter((c) => Array.isArray(c.zones) && c.zones.length > 0);
   const first = num(k.first_s);
   const last = num(k.last_s);
   return (
@@ -333,8 +334,10 @@ function KernelPcie({ k, cooling }: { k: Row; cooling: Row[] }) {
       {devices.length > 0 && <p className="muted small">Devices: {devices.join(", ")}</p>}
       {active.length > 0 && (
         <p className="bad">
-          Kernel PCIe link-speed cooling active:{" "}
-          {active.map((c) => `${String(c.type)} state ${String(c.cur_state)}`).join(", ")}
+          Thermal zones that can slow a PCIe link:{" "}
+          {active
+            .map((c) => `${(c.zones as string[]).join(", ")} → ${String(c.type).replace("PCIe_Port_Link_Speed_", "")}`)
+            .join("; ")}
         </p>
       )}
       {lines.length > 0 && (

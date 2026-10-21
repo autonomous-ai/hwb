@@ -102,7 +102,7 @@ hwb serve --concurrency 1,8,32,64 --requests 8 --max-tokens 512   # a heavier sw
 
 ## 4. Read and share the results
 
-- **Terminal:** `serve.checks` (passed or failed, with reasons) and `serve.load`, for example "2100 tok/s at 16 concurrent, TTFT p50 900 ms, 140 tok/s per request".
+- **Terminal:** `serve.checks` (passed or failed, with reasons), `serve.load`, for example "2100 tok/s at 16 concurrent, TTFT p50 900 ms, 140 tok/s per request", and `serve.pcie` for a local server: a GPU link below its generation while busy (with the cause when the BIOS limits the slot), a narrowed link, or PCIe errors.
 - **`hwb-runs/report.html` → Benchmarks → Model serving:** the summary numbers, each check with the model's actual answer, a table per concurrency level, the exact vLLM command, and GPU temperature, power, clock and PCIe charts.
 - **Run directory:** `vllm.log`, plus `serve.csv` and `serve-gpu.csv` with every sample.
 - **`hwb submit`:** uploads a sanitized copy and gives you a link to share.

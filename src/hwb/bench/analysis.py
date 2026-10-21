@@ -179,6 +179,13 @@ PCIE_HINT = (
 )
 
 
+BIOS_GEN_HINT = (
+    "the BIOS sets this slot to a lower PCIe generation (often done for a riser): set its link "
+    "speed to Auto, then check the link holds the higher generation with no correctable errors "
+    "under load (hwb serve, hwb bench thermal); keep the lower setting only if it does not"
+)
+
+
 WIDTH_HINT = (
     "x8 or narrower from the start usually means slot wiring, a riser or the BIOS bifurcation "
     "setting; a link that narrows during the run is marginal: reseat, replace risers, check airflow"
@@ -191,17 +198,21 @@ def pcie_findings(ts: Timeseries) -> list[Finding]:
     for gpu, m in (ts.meta.get("pcie") or {}).items():
         gens = ts.values(f"gpu{gpu}.pcie_gen")
         util = ts.values(f"gpu{gpu}.util")
-        max_gen = m.get("max_gen")
+        max_gen, port, target = m.get("max_gen"), m.get("port_max_gen"), m.get("port_target_gen")
+        if max_gen and port and port < max_gen:
+            max_gen = port  # an older slot: the card runs at the slot's best, nothing to fix
         busy = [i for i, u in enumerate(util) if u is not None and u >= GPU_BUSY_PCT]
         if max_gen and busy:
             low = [g for i in busy if i < len(gens) and (g := gens[i]) is not None and g < max_gen]
             if low:
+                capped = bool(target and target < max_gen)
                 findings.append(
                     Finding(
                         "warn",
                         f"GPU{gpu} PCIe link at Gen{min(low):.0f} (max Gen{max_gen}) while busy, "
-                        f"in {len(low)} of {len(busy)} busy samples",
-                        PCIE_HINT,
+                        f"in {len(low)} of {len(busy)} busy samples"
+                        + (f"; the BIOS limits the slot to Gen{target}" if capped else ""),
+                        BIOS_GEN_HINT if capped else PCIE_HINT,
                     )
                 )
         if m.get("max_width") and m.get("min_width") and m["min_width"] < m["max_width"]:

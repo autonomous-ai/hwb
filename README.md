@@ -75,7 +75,7 @@ Interactive runs offer to submit at the end; `HWB_GATEWAY=off` turns that off.
 
 | command | status |
 |---|---|
-| `info` (default): driver checks | ✅ nouveau, kernel module, PCI binding, Secure Boot, headers, nvidia-smi, Blackwell, PCIe width, persistence, libcuda, CUDA toolkit, Xid |
+| `info` (default): driver checks | ✅ nouveau, kernel module, PCI binding, Secure Boot, headers, nvidia-smi, Blackwell, PCIe width and generation, persistence, libcuda, CUDA toolkit, Xid |
 | `info` (default): inventory | ✅ system, board, CPU, memory/DIMMs, NUMA, disks, NICs, temperatures, GPUs |
 | `install driver\|cuda\|tools` | ✅ dry-run plans, guarded `--apply` |
 | `bench cpu`, `bench thermal` | ✅ load (stress-ng or built-in fallback) with a time series of CPU and GPU temperature, utilisation, clocks and power; charts in the report |

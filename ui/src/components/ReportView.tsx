@@ -17,6 +17,9 @@ import { KV, TableWrap, Value } from "./Data";
 import { Card, DriverFacts, InstallPlan, Inventory } from "./Sections";
 import { TabPanel, Tabs, type TabItem } from "./Tabs";
 
+const COMPANY_URL = "https://autonomous.ai";
+const REPO_URL = "https://github.com/autonomous-ai/hwb";
+
 const KNOWN_SECTIONS = new Set(["inventory", "gpu_facts", "install_plan", "bench"]);
 const ALL = () => new Set<Status>(STATUSES);
 
@@ -494,6 +497,16 @@ export function ReportView({
         ) : shared && view.kind === "run" ? null : (
           "The overview shows the most recent result of each check; open a run tab for its full detail."
         )}
+        <p className="credit">
+          hwb is made by{" "}
+          <a href={COMPANY_URL} target="_blank" rel="noopener noreferrer">
+            Autonomous
+          </a>{" "}
+          · open source on{" "}
+          <a href={REPO_URL} target="_blank" rel="noopener noreferrer">
+            GitHub
+          </a>
+        </p>
       </footer>
     </main>
   );

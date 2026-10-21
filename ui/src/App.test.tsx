@@ -501,3 +501,15 @@ describe("charts on phones", () => {
     expect(container.querySelector(".tooltip")).toBeNull();
   });
 });
+
+describe("footer", () => {
+  it("credits the company and links the repository", () => {
+    render(<App bundle={normalize(HEALTHY)} />);
+    const footer = document.querySelector("footer")!;
+    const links = Array.from(footer.querySelectorAll(".credit a")).map((a) => [a.textContent, a.getAttribute("href")]);
+    expect(links).toEqual([
+      ["Autonomous", "https://autonomous.ai"],
+      ["GitHub", "https://github.com/autonomous-ai/hwb"],
+    ]);
+  });
+});

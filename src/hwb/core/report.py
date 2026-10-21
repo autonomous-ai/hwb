@@ -49,6 +49,10 @@ def build_payload(ctx: RunContext) -> dict[str, Any]:
     }
 
 
+COMPANY_URL = "https://autonomous.ai"
+REPO_URL = "https://github.com/autonomous-ai/hwb"
+
+
 def render_markdown(payload: dict[str, Any]) -> str:
     lines = [
         f"# hwb report — {payload['host']}",
@@ -64,6 +68,10 @@ def render_markdown(payload: dict[str, Any]) -> str:
         summary = str(r["summary"]).replace("|", "\\|")
         hint = str(r["hint"] or "").replace("|", "\\|")
         lines.append(f"| {r['status'].upper()} | {r['name']} | {summary} | {hint} |")
+    lines += [
+        "",
+        f"---\n\nhwb is made by [Autonomous]({COMPANY_URL}) · open source on [GitHub]({REPO_URL})",
+    ]
     return "\n".join(lines) + "\n"
 
 

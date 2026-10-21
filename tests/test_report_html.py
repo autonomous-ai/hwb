@@ -46,3 +46,14 @@ def test_non_json_values_are_stringified() -> None:
     from pathlib import Path
 
     assert _embedded(render_html({"path": Path("/tmp/x")})) == {"path": "/tmp/x"}
+
+
+def test_markdown_report_credits_company_and_repo() -> None:
+    from hwb.core.report import render_markdown
+
+    md = render_markdown(
+        {"host": "h", "command": "info", "started_at": "t", "tool": {"version": "0"}, "results": []}
+    )
+    assert md.rstrip().endswith(
+        "hwb is made by [Autonomous](https://autonomous.ai) · open source on [GitHub](https://github.com/autonomous-ai/hwb)"
+    )

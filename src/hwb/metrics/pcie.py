@@ -18,6 +18,10 @@ Capabilities (``max_link_speed``: the slot itself is older) and, as root, its Ta
 (Link Control 2 in config space). A lowered target is the BIOS's doing (often set for a riser)
 only on a clean link: a marginal link that took errors falls back too, and then the target can
 read low as well, so the correctable error count since boot decides which it is.
+
+For debugging a link (``debug_snapshot``, ``kernel_events``): both ends' link registers (as
+root), the AER counters by error type, nvidia-smi's PCI view, the kernel's PCIe/AER/Xid lines
+and the kernel's PCIe link-speed cooling devices. Never the Device Serial Number capability.
 """
 
 from __future__ import annotations
@@ -25,6 +29,8 @@ from __future__ import annotations
 import contextlib
 import logging
 import re
+import time
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -49,7 +55,26 @@ _ROLLOVERS = re.compile(r"Replay Number Rollovers\s*:\s*(\d+)")
 _REPLAY_ROLLOVER = 1 << 8  # the replay counter wraps at 256 (NVML)
 _CAP_LIST = 0x10  # Status register bit: the device has a capabilities list
 _CAP_PCIE = 0x10  # capability id of the PCI Express capability
-_LNKCTL2 = 0x30  # Link Control 2, inside the PCI Express capability
+_LNKCAP, _LNKSTA, _LNKCTL2, _LNKSTA2 = 0x0C, 0x12, 0x30, 0x32  # inside the PCIe capability
+_ADDR_IN_TEXT = re.compile(r"\b([0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7])\b")
+_KMSG = re.compile(r"^\[\s*([\d.]+)\]\s+\S+\s+kernel:\s?(.*)$")  # short-monotonic; drops the host
+# the error bits the kernel's AER driver names in "[ 0] RxErr  (First)" lines
+_AER_NAMES = (
+    "RxErr|BadTLP|BadDLLP|Rollover|Timeout|NonFatalErr|CorrIntErr|HeaderOF|Undefined|DLP|SDES|TLP"
+    "|FCP|CmpltTO|CmpltAbrt|UnxCmplt|RxOF|MalfTLP|ECRC|UnsupReq|ACSViol|UncorrIntErr|BlockedTLP"
+    "|AtomicOpBlocked|TLPBlockedErr|PoisonTLPBlocked|DMWrReqBlocked|IDECheck|MisIDETLP|PCRC_CHECK"
+)
+_ERR_TYPE = re.compile(rf"\[\s*\d+\]\s+({_AER_NAMES})\b")
+_PCIE_EVENT = re.compile(
+    rf"AER|PCIe Bus Error|error status/mask|{_ERR_TYPE.pattern}|bwctrl"
+    r"|NVRM: (?:Xid|GPU at PCI|.*fallen off)"
+    # link state lines count only when they name a PCI device (not "ata3: SATA link down")
+    r"|\b[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]\b.*(?:[Ll]ink (?:[Ss]peed|down|up)|limited by"
+    r"|\bDPC\b|retrain)"
+)
+_OSC_AER = re.compile(r"_OSC: (OS now controls|platform does not support) \[([^\]]*)\]")
+_GPU_UUID = re.compile(r"\bGPU-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b", re.I)
+_KERNEL_KEEP = (20, 80)  # first and last lines kept in the report
 
 
 def _read(path: Path) -> str | None:
@@ -109,19 +134,194 @@ def parse_replays(text: str) -> dict[str, int]:
     return out
 
 
-def target_gen(config: bytes) -> int | None:
-    """Target Link Speed (Link Control 2) from a port's config space: the highest generation
-    the link may train to. Unprivileged reads of ``config`` stop at 64 bytes, so this needs root."""
+def _pcie_cap(config: bytes) -> int | None:
+    """Offset of the PCI Express capability in a config space dump (None: unprivileged read)."""
     if len(config) <= 0x40 or not config[0x06] & _CAP_LIST:
         return None
     ptr, seen = config[0x34] & 0xFC, set()
-    while ptr >= 0x40 and ptr not in seen and ptr + _LNKCTL2 + 2 <= len(config):
+    while ptr >= 0x40 and ptr not in seen and ptr + _LNKSTA2 + 2 <= len(config):
         seen.add(ptr)
         if config[ptr] == _CAP_PCIE:
-            speed = int.from_bytes(config[ptr + _LNKCTL2 : ptr + _LNKCTL2 + 2], "little") & 0xF
-            return speed or None  # the encoding is the generation: 1 = 2.5 GT/s ... 5 = 32 GT/s
+            return ptr
         ptr = config[ptr + 1] & 0xFC
     return None
+
+
+def _reg(config: bytes, off: int, size: int = 2) -> int:
+    return int.from_bytes(config[off : off + size], "little")
+
+
+def target_gen(config: bytes) -> int | None:
+    """Target Link Speed (Link Control 2) from a port's config space: the highest generation
+    the link may train to. Unprivileged reads of ``config`` stop at 64 bytes, so this needs root."""
+    cap = _pcie_cap(config)
+    if cap is None:
+        return None
+    return _reg(config, cap + _LNKCTL2) & 0xF or None  # the encoding is the generation
+
+
+def link_regs(config: bytes) -> dict[str, Any] | None:
+    """Link Capabilities/Status/Control 2/Status 2 of one end of a link (speeds as generations)."""
+    cap = _pcie_cap(config)
+    if cap is None:
+        return None
+    lnkcap, sta = _reg(config, cap + _LNKCAP, 4), _reg(config, cap + _LNKSTA)
+    sta2 = _reg(config, cap + _LNKSTA2)
+    return {
+        "cap_gen": lnkcap & 0xF or None,
+        "cap_width": (lnkcap >> 4) & 0x3F or None,
+        "gen": sta & 0xF or None,
+        "width": (sta >> 4) & 0x3F or None,
+        "target_gen": _reg(config, cap + _LNKCTL2) & 0xF or None,
+        "training": bool(sta & 1 << 11),
+        "dl_active": bool(sta & 1 << 13),
+        # speed/width changed by a retrain: software asked, or the link was unreliable
+        "bw_mgmt_status": bool(sta & 1 << 14),
+        "autonomous_bw_status": bool(sta & 1 << 15),
+        "eq_complete": bool(sta2 & 1 << 1),
+        "eq_request": bool(sta2 & 1 << 5),
+    }
+
+
+def aer_counts(root: Path, addr: str) -> dict[str, dict[str, int]] | None:
+    """AER counters since boot by error type ("RxErr", "BadTLP", ...), non-zero ones and totals."""
+    out: dict[str, dict[str, int]] = {}
+    for kind, total_key in _AER_KEYS.items():
+        text = _read(root / "sys/bus/pci/devices" / addr / kind)
+        if text is None:
+            continue
+        counts: dict[str, int] = {}
+        for line in text.splitlines():
+            key, _, value = line.strip().rpartition(" ")
+            if value.isdigit() and (int(value) or key.strip() == total_key):
+                counts["total" if key.strip() == total_key else key.strip()] = int(value)
+        out[kind.removeprefix("aer_dev_")] = counts
+    return out or None
+
+
+def _end(root: Path, addr: str) -> dict[str, Any]:
+    dev = root / "sys/bus/pci/devices" / addr
+    config = b""
+    with contextlib.suppress(OSError):
+        config = (dev / "config").read_bytes()
+    return {
+        "addr": addr,
+        "max_gen": link_gen(_read(dev / "max_link_speed")),
+        "max_width": link_width(_read(dev / "max_link_width")),
+        "gen": link_gen(_read(dev / "current_link_speed")),
+        "width": link_width(_read(dev / "current_link_width")),
+        "regs": link_regs(config),
+        "aer": aer_counts(root, addr),
+    }
+
+
+def debug_snapshot(root: Path, addrs: list[str]) -> list[dict[str, Any]]:
+    """Both ends of each GPU's link: sysfs state, link registers (root), AER by type."""
+    out = []
+    for addr in addrs:
+        port = upstream_port(root, addr)
+        out.append({"gpu": _end(root, addr), "port": _end(root, port) if port else None})
+    return out
+
+
+def cooling_devices(root: Path) -> list[dict[str, Any]]:
+    """The kernel's PCIe link-speed cooling devices (bwctrl): state > 0 means it slowed a link."""
+    out = []
+    for d in sorted((root / "sys/class/thermal").glob("cooling_device*")):
+        kind = _read(d / "type") or ""
+        if kind.startswith("PCIe_Port_Link_Speed"):
+            cur, mx = _read(d / "cur_state"), _read(d / "max_state")
+            out.append(
+                {
+                    "type": kind,
+                    "cur_state": int(cur) if cur and cur.isdigit() else None,
+                    "max_state": int(mx) if mx and mx.isdigit() else None,
+                }
+            )
+    return out
+
+
+def parse_kernel_events(text: str) -> dict[str, Any]:
+    """PCIe/AER/Xid lines of a short-monotonic kernel log: counts by error type and device, and
+    the first and last lines with their time since boot."""
+    events: list[tuple[float, str]] = []
+    aer_native: bool | None = None  # does the OS (not the firmware) handle AER, so it sees errors?
+    for line in text.splitlines():
+        m = _KMSG.match(line)
+        osc = _OSC_AER.search(m.group(2)) if m else None
+        if osc and "AER" in osc.group(2).split():
+            native = osc.group(1) == "OS now controls"
+            aer_native = native if aer_native is None else aer_native and native
+            continue
+        if m and _PCIE_EVENT.search(m.group(2)):
+            # "NVRM: GPU at PCI:...: GPU-<uuid>" names the unit: never into a report
+            events.append((float(m.group(1)), _GPU_UUID.sub("GPU-[uuid]", m.group(2).strip())))
+    types = Counter(m.group(1) for _, msg in events if (m := _ERR_TYPE.search(msg)))
+    devices = Counter(a.group(1) for _, msg in events if (a := _ADDR_IN_TEXT.search(msg)))
+    head, tail = _KERNEL_KEEP
+    keep = events if len(events) <= head + tail else events[:head] + events[-tail:]
+    return {
+        "aer_native": aer_native,
+        "lines": len(events),
+        "corrected": sum("severity=Correct" in msg for _, msg in events),
+        "uncorrected": sum("severity=Uncorrect" in msg for _, msg in events),
+        "error_types": dict(types.most_common()),
+        "devices": dict(devices.most_common()),
+        "first_s": events[0][0] if events else None,
+        "last_s": events[-1][0] if events else None,
+        "sample": [[round(t, 1), msg] for t, msg in keep],
+    }
+
+
+def kernel_events(since: float | None = None) -> dict[str, Any] | None:
+    """parse_kernel_events over this boot's kernel log (or since a wall-clock time); None if
+    the log is unreadable (journald without permission, no journalctl)."""
+    if not proc.have("journalctl"):
+        return None
+    argv = ["journalctl", "-k", "--no-pager", "-o", "short-monotonic"]
+    argv += [f"--since=@{since:.0f}"] if since is not None else ["-b"]
+    res = proc.run(argv, timeout=60)
+    return parse_kernel_events(res.stdout) if res.ok else None
+
+
+_SMI_FIELDS = {
+    ("PCIe Generation", "Max"): "gen_max",
+    ("PCIe Generation", "Current"): "gen_current",
+    ("PCIe Generation", "Device Current"): "gen_device_current",
+    ("PCIe Generation", "Device Max"): "gen_device_max",
+    ("PCIe Generation", "Host Max"): "gen_host_max",
+    ("Link Width", "Max"): "width_max",
+    ("Link Width", "Current"): "width_current",
+    (None, "Replays Since Reset"): "replays",
+    (None, "Replay Number Rollovers"): "replay_rollovers",
+    (None, "Tx Throughput"): "tx_kb_s",
+    (None, "Rx Throughput"): "rx_kb_s",
+}
+
+
+def parse_smi_pci(text: str) -> dict[str, dict[str, int]]:
+    """The PCI link fields of ``nvidia-smi -q`` per GPU (by sysfs address). Only these numbers
+    are kept: the full output also carries serial numbers and UUIDs."""
+    out: dict[str, dict[str, int]] = {}
+    heads = list(_GPU_BLOCK.finditer(text))
+    for i, m in enumerate(heads):
+        block = text[m.end() : heads[i + 1].start() if i + 1 < len(heads) else len(text)]
+        fields: dict[str, int] = {}
+        sub: str | None = None
+        for line in block.splitlines():
+            key, sep, value = line.strip().partition(":")
+            key = key.strip()
+            if not sep:
+                sub = key if key in ("PCIe Generation", "Link Width") else None
+                continue
+            name = _SMI_FIELDS.get((sub, key)) or _SMI_FIELDS.get((None, key))
+            num = re.match(r"\s*(\d+)", value)
+            if name and num and name not in fields:
+                fields[name] = int(num.group(1))
+            if key in ("Replays Since Reset",):
+                sub = None
+        out[normalize_bus_id(m.group(1))] = fields
+    return out
 
 
 @dataclass(frozen=True)
@@ -170,6 +370,14 @@ def link_limit(root: Path, addr: str) -> LinkLimit:
         target_gen(config),
         sum(counts) if counts else None,
     )
+
+
+def _for_link(kernel: dict[str, Any] | None, *addrs: str | None) -> list[list[Any]] | None:
+    """The kernel lines that name this GPU or its port (None: log unreadable)."""
+    if kernel is None:
+        return None
+    names = [a for a in addrs if a]
+    return [line for line in kernel["sample"] if any(a in line[1] for a in names)]
 
 
 def gpu_addresses() -> dict[str, str]:
@@ -231,6 +439,7 @@ class PcieWatch:
                 )
             )
         self._replays0: dict[str, int] = {}
+        self._started: float | None = None
 
     def _counters(self, g: _Gpu) -> dict[str, int | None]:
         out: dict[str, int | None] = {}
@@ -240,6 +449,7 @@ class PcieWatch:
         return out
 
     def start(self) -> None:
+        self._started = time.time()
         for g in self.gpus:
             g.base = self._counters(g)
         try:
@@ -267,6 +477,12 @@ class PcieWatch:
         except HwbError:
             replays1 = {}
         out: dict[str, dict[str, Any]] = {}
+        try:
+            # what the kernel said about PCIe links while this ran (AER, retrains, Xid)
+            kernel = kernel_events(since=self._started) if self._started else None
+        except HwbError as exc:
+            log.debug("no kernel log: %s", exc)
+            kernel = None
         for g in self.gpus:
             now = self._counters(g)
             r0, r1 = self._replays0.get(g.addr), replays1.get(g.addr)
@@ -284,5 +500,6 @@ class PcieWatch:
                     g.base, now, ("aer_dev_nonfatal", "aer_dev_fatal")
                 ),
                 "replays": r1 - r0 if r0 is not None and r1 is not None else None,
+                "kernel_events": _for_link(kernel, g.addr, g.upstream),
             }
         return out

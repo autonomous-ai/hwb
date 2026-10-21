@@ -444,6 +444,44 @@ describe("models on the GPUs", () => {
   });
 });
 
+describe("PCIe debug", () => {
+  it("shows both ends of each GPU link and the kernel's PCIe lines", async () => {
+    const user = userEvent.setup();
+    const facts = (HEALTHY.sections.gpu_facts ?? {}) as Row;
+    const end = (addr: string, gen: number, regs: Row | null, cor: number) => ({
+      addr, max_gen: 5, max_width: 16, gen, width: 16, regs,
+      aer: { correctable: cor ? { RxErr: cor, total: cor } : { total: 0 }, nonfatal: { total: 0 }, fatal: { total: 0 } },
+    });
+    const report: Report = {
+      ...HEALTHY,
+      sections: {
+        ...HEALTHY.sections,
+        gpu_facts: {
+          ...facts,
+          pcie_debug: [{ gpu: end("0000:70:00.0", 4, null, 0), port: end("0000:6f:01.0", 4, { target_gen: 4 }, 913) }],
+          smi_pci: { "0000:70:00.0": { gen_host_max: 4, replays: 0 } },
+          kernel_pcie: {
+            lines: 2, corrected: 1, uncorrected: 0, error_types: { RxErr: 1 }, devices: { "0000:6f:01.0": 2 },
+            first_s: 1180.2, last_s: 1180.2,
+            sample: [[1180.2, "pcieport 0000:6f:01.0: PCIe Bus Error: severity=Correctable, type=Physical Layer"], [1180.2, "pcieport 0000:6f:01.0:    [ 0] RxErr                  (First)"]],
+          },
+          pcie_cooling: [],
+        },
+      },
+    };
+    render(<App bundle={normalize(report)} />);
+    await user.click(tab("Report sections", "GPU driver"));
+    const card = (t: string) => Array.from(activePanel().querySelectorAll("section.card")).find((c) => c.querySelector("h3")?.textContent === t)!;
+    const links = card("PCIe links");
+    expect(within(links as HTMLElement).getByText("913 (RxErr 913)").classList.contains("bad")).toBe(true);
+    expect(links.querySelectorAll("td.bad").length).toBeGreaterThan(1); // the slot set to Gen4 is marked
+    const kernel = card("Kernel PCIe log");
+    expect(kernel.textContent).toContain("1 corrected, 0 uncorrected, from 1180 s to 1180 s after boot");
+    expect(kernel.querySelector("pre.log")!.textContent).toContain("[ 0] RxErr");
+    expect(card("Driver facts").textContent).not.toContain("pcie_debug");
+  });
+});
+
 describe("model weights on disk", () => {
   it("lists cached models in the inventory", async () => {
     const user = userEvent.setup();

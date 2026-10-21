@@ -258,6 +258,7 @@ tbody tr:nth-child(even) td { background: var(--tint); }
 .phase-table caption { text-align: left; font-weight: 600; font-size: 14px; padding: 14px 0 6px; }
 
 footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
+.credit { margin: 10px 0 0; padding-top: 10px; border-top: 1px solid var(--rule); }
 
 @media (max-width: 760px) {
   .hero { grid-template-columns: 1fr; }

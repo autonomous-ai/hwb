@@ -16,6 +16,7 @@
 | `gpu.persistence` | Persistence mode is on (avoids driver re-initialization delays and first-call latency) | **WARN:** `sudo systemctl enable --now nvidia-persistenced` (or `sudo nvidia-smi -pm 1`, which doesn't survive a reboot) |
 | `gpu.libcuda` | `libcuda.so.1` is in the linker cache. PyTorch, vLLM and every CUDA app need it | **FAIL:** reinstall the driver package. Run `sudo ldconfig` |
 | `gpu.cuda_toolkit` | `nvcc` version, if installed. WARNs when the toolkit is newer than the driver supports | **SKIP** is normal: the toolkit is optional. **WARN:** upgrade the driver or install a matching `cuda-toolkit-X-Y` |
+| `gpu.pcie_kernel` | No PCIe errors (AER) in this boot's kernel log, and no kernel cooling device slowing a PCIe link | **SKIP:** run as root to read the log. **WARN:** corrected errors, with the error types (`RxErr` = signal trouble at the receiver), the device and when they started (seconds after boot): on a GPU link they make it fall back a generation, usually once the area is hot. Check airflow, reseat card and riser, try another riser. **FAIL:** uncorrected errors. If the firmware handles AER (`_OSC: platform does not support [AER]`), the OS sees no corrected errors at all, and the check says so |
 | `gpu.xid` | No `NVRM: Xid` events in this boot's kernel log | **SKIP:** run as root to read the log. **WARN:** look up the codes. 13/31/43 are usually application faults. 48/63/64/94/95 are memory/ECC. 79 means the GPU fell off the bus (power, thermal, riser). 119/120 are GSP firmware. Reboot, then reproduce under `bench thermal` |
 
 ## GPUs passed through to VMs
@@ -44,6 +45,7 @@ PASS   gpu.pcie_link      PCIe link width and generation at max on all GPUs
 PASS   gpu.persistence    persistence mode on
 PASS   gpu.libcuda        libcuda.so.1 at /lib/x86_64-linux-gnu/libcuda.so.1
 SKIP   gpu.cuda_toolkit   nvcc not found (optional: ...)
+PASS   gpu.pcie_kernel     no PCIe errors in the kernel log this boot
 PASS   gpu.xid            no Xid events this boot
 ```
 
@@ -59,3 +61,12 @@ PASS   gpu.xid            no Xid events this boot
   Its healthy busy link is **Gen5**: a drop to Gen4 under load is already a downgrade.
 
 **"A6000" is ambiguous.** "RTX A6000" (Ampere, 48 GB, Gen4) and "RTX PRO 6000 Blackwell" (96 GB, Gen5) are often both called "A6000". Check the GPU name and compute capability in the hwb report (or `nvidia-smi --query-gpu=name,compute_cap --format=csv`) before reasoning about expected PCIe generation, memory budget or which model builds will run. hwb itself always compares a link with *its own* maximum, so its PCIe findings are right for either card.
+
+## PCIe debug data
+
+`sudo hwb` also records, in the report's **GPU driver** tab:
+- **PCIe links:** for each GPU, both ends of its link. The card's and the slot's maximum, what the slot is set to train to (*Target Link Speed*), what it runs at now, nvidia-smi's host maximum and replay count, and the AER error counters since boot by type for the card and its port. Register values need root.
+- **Kernel PCIe log:** this boot's PCIe/AER/Xid kernel lines, counted by error type and device, with the time since boot of the first and last one, plus the first 20 and last 80 lines. GPU UUIDs are removed.
+- Kernel PCIe link-speed cooling devices, if any.
+
+`hwb monitor`, `hwb serve` and the benchmarks add the kernel lines about each GPU's link that appeared *during* the run to their PCIe table data, so a drop to a lower generation can be matched with the errors that caused it.

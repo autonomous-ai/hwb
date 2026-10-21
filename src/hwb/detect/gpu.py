@@ -14,6 +14,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from .. import nvsmi
 from ..core import proc
@@ -22,6 +23,7 @@ from ..core.errors import HwbError
 from ..core.log import fields
 from ..core.platform import os_info
 from ..core.result import CheckResult, Status
+from ..metrics import pcie
 from ..metrics.pcie import LinkLimit, link_limit, normalize_bus_id
 
 log = logging.getLogger(__name__)
@@ -67,6 +69,11 @@ class GpuFacts:
     nvcc_version: str | None = None
     xid_lines: list[str] | None = None
     pcie_links: list[LinkLimit] = field(default_factory=list)
+    # PCIe debug: both ends of each GPU link, nvidia-smi's PCI view, kernel PCIe/AER lines
+    pcie_debug: list[dict[str, Any]] = field(default_factory=list)
+    smi_pci: dict[str, dict[str, int]] | None = None
+    kernel_pcie: dict[str, Any] | None = None
+    pcie_cooling: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def passthrough(self) -> list[PciGpu]:
@@ -164,6 +171,13 @@ def xid_lines() -> list[str] | None:
     return [ln for ln in res.stdout.splitlines() if "NVRM: Xid" in ln]
 
 
+def smi_pci() -> dict[str, dict[str, int]] | None:
+    if not proc.have("nvidia-smi"):
+        return None
+    res = proc.run(["nvidia-smi", "-q"], timeout=120)
+    return pcie.parse_smi_pci(res.stdout) if res.ok else None
+
+
 def gather() -> GpuFacts:
     facts = GpuFacts()
     kernel = os_info().kernel
@@ -189,6 +203,17 @@ def gather() -> GpuFacts:
         ("libcuda", lambda: setattr(facts, "libcuda", find_libcuda())),
         ("nvcc", lambda: setattr(facts, "nvcc_version", nvcc_version())),
         ("xid", lambda: setattr(facts, "xid_lines", xid_lines())),
+        (
+            "pcie_debug",
+            lambda: setattr(
+                facts,
+                "pcie_debug",
+                pcie.debug_snapshot(Path("/"), [g.address for g in facts.host_gpus]),
+            ),
+        ),
+        ("kernel_pcie", lambda: setattr(facts, "kernel_pcie", pcie.kernel_events())),
+        ("pcie_cooling", lambda: setattr(facts, "pcie_cooling", pcie.cooling_devices(Path("/")))),
+        ("smi_pci", lambda: setattr(facts, "smi_pci", smi_pci())),
         (
             "pcie_links",
             lambda: setattr(
@@ -398,6 +423,8 @@ def check_pcie_link(f: GpuFacts) -> CheckResult:
     if not f.smi_rows:
         return CheckResult("gpu.pcie_link", Status.SKIP, "nvidia-smi unavailable")
     limits = {lim.addr: lim for lim in f.pcie_links}
+    # firmware-first AER: the OS never sees corrected errors, so "no errors" proves nothing
+    aer_blind = bool(f.kernel_pcie) and f.kernel_pcie.get("aer_native") is False  # type: ignore[union-attr]
     narrow, capped, errors, notes = [], [], [], []
     bios = degraded = False
     for r in f.smi_rows:
@@ -416,6 +443,11 @@ def check_pcie_link(f: GpuFacts) -> CheckResult:
         if lim.port_gen and lim.port_gen < lim.gpu_gen:
             notes.append(
                 f"{gpu} Gen{lim.port_gen} card Gen{lim.gpu_gen}: the slot is Gen{lim.port_gen}"
+            )
+        elif lim.bios_capped and aer_blind:
+            capped.append(
+                f"{gpu} Gen{lim.target_gen} of Gen{slot}: a BIOS setting or a fallback after "
+                "errors (the firmware handles AER, so hwb cannot see errors)"
             )
         elif lim.bios_capped:
             bios = True
@@ -460,6 +492,53 @@ def check_pcie_link(f: GpuFacts) -> CheckResult:
     return CheckResult(
         "gpu.pcie_link", Status.WARN, "; ".join(parts) + note, data=data, hint="; ".join(hints)
     )
+
+
+def check_pcie_kernel(f: GpuFacts) -> CheckResult:
+    """PCIe trouble the kernel logged this boot (AER errors, link retrains) and kernel cooling
+    devices that slowed a PCIe link. Every device counts: a sick NVMe link matters too."""
+    k = f.kernel_pcie
+    cooling = [c for c in f.pcie_cooling if c.get("cur_state")]
+    if k is None and not cooling:
+        return CheckResult("gpu.pcie_kernel", Status.SKIP, "kernel log unreadable (run as root)")
+    k = k or {}
+    gpus = {d["gpu"]["addr"]: f"GPU link {d['gpu']['addr']}" for d in f.pcie_debug}
+    gpus |= {d["port"]["addr"]: f"GPU port {d['port']['addr']}" for d in f.pcie_debug if d["port"]}
+    data = {"kernel": k, "cooling": f.pcie_cooling}
+    parts = []
+    errors = k.get("corrected", 0) + k.get("uncorrected", 0)
+    if errors:
+        kinds = ", ".join(f"{t} {n}" for t, n in list(k["error_types"].items())[:4])
+        where = ", ".join(gpus.get(a, a) for a in list(k["devices"])[:3])
+        parts.append(
+            f"kernel logged {errors} PCIe error messages this boot"
+            + (f" ({kinds})" if kinds else "") + (f" on {where}" if where else "")
+            + f", first {k['first_s']:.0f} s after boot, last {k['last_s']:.0f} s"
+        )  # fmt: skip
+    for c in cooling:
+        parts.append(
+            f"kernel cooling device {c['type']} slows a PCIe link (state {c['cur_state']})"
+        )
+    if not parts:
+        if k.get("aer_native") is False:
+            return CheckResult(
+                "gpu.pcie_kernel", Status.PASS,
+                "no PCIe errors in the kernel log, but the firmware handles AER (_OSC), so the OS "
+                "does not see corrected errors: zero error counts here prove nothing", data=data,
+            )  # fmt: skip
+        return CheckResult(
+            "gpu.pcie_kernel", Status.PASS, "no PCIe errors in the kernel log this boot", data=data
+        )
+    return CheckResult(
+        "gpu.pcie_kernel",
+        Status.FAIL if k.get("uncorrected") else Status.WARN,
+        "; ".join(parts),
+        data=data,
+        hint="errors on a GPU link make it fall back a generation: check airflow around the slot "
+        "and CPU, reseat card and riser, try another riser; the times since boot show when it "
+        "started (compare with hwb monitor)" if errors else
+        "a thermal zone throttles the PCIe link: find the zone bound to it in /sys/class/thermal",
+    )  # fmt: skip
 
 
 @needs_host_driver
@@ -531,6 +610,7 @@ CHECKS: tuple[Check, ...] = (
     check_nvidia_smi,
     check_blackwell,
     check_pcie_link,
+    check_pcie_kernel,
     check_persistence,
     check_libcuda,
     check_cuda_toolkit,

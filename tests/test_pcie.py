@@ -164,3 +164,80 @@ def test_busy_link_below_max_after_errors_is_not_the_bios() -> None:
         _ts([4, 4], [99, 99], max_gen=5, port_max_gen=5, port_target_gen=4, errors_since_boot=913)
     )
     assert "BIOS" not in f.text and f.hint == analysis.PCIE_HINT
+
+
+KERNEL = """\
+[    2.200000] myhost kernel: acpi PNP0A08:00: _OSC: OS now controls [PCIeHotplug SHPCHotplug PME AER PCIeCapability LTR DPC]
+[    2.436359] myhost kernel: AMD-Vi: Extended features (0x25bf, 0x1d): PPR X2APIC NX GT [5] IA GA PC
+[    4.120000] myhost kernel: pci 0000:70:00.0: 252.048 Gb/s available PCIe bandwidth, limited by 16.0 GT/s PCIe x16 link at 0000:6f:01.0 (capable of 504.112 Gb/s with 32.0 GT/s PCIe x16 link)
+[    9.500000] myhost kernel: NVRM: GPU at PCI:0000:70:00: GPU-12345678-1234-1234-1234-123456789abc
+[   12.000000] myhost kernel: usb 1-1: new high-speed USB device number 2
+[   12.100000] myhost kernel: ata3: SATA link down (SStatus 0 SControl 300)
+[ 1180.200000] myhost kernel: pcieport 0000:6f:01.0: AER: Correctable error message received from 0000:6f:01.0
+[ 1180.200100] myhost kernel: pcieport 0000:6f:01.0: PCIe Bus Error: severity=Correctable, type=Physical Layer, (Receiver ID)
+[ 1180.200200] myhost kernel: pcieport 0000:6f:01.0:   device [8086:352a] error status/mask=00000001/00002000
+[ 1180.200300] myhost kernel: pcieport 0000:6f:01.0:    [ 0] RxErr                  (First)
+"""
+
+
+def test_kernel_pcie_events_are_counted_and_scrubbed() -> None:
+    k = pcie.parse_kernel_events(KERNEL)
+    assert k["aer_native"] is True
+    assert k["lines"] == 6 and k["corrected"] == 1 and k["uncorrected"] == 0
+    assert k["error_types"] == {"RxErr": 1}
+    assert k["devices"]["0000:6f:01.0"] == 4
+    assert (k["first_s"], k["last_s"]) == (4.12, 1180.2003)
+    text = " ".join(m for _, m in k["sample"])
+    assert "myhost" not in text and "12345678-1234" not in text and "GPU-[uuid]" in text
+    assert "usb" not in text
+
+
+SMI_PCI = """
+GPU 00000000:70:00.0
+    Serial Number                         : 1234567890123
+    PCI
+        GPU Link Info
+            PCIe Generation
+                Max                       : 4
+                Current                   : 4
+                Device Current            : 4
+                Device Max                : 5
+                Host Max                  : 4
+            Link Width
+                Max                       : 16x
+                Current                   : 16x
+        Replays Since Reset               : 7
+        Replay Number Rollovers           : 0
+        Tx Throughput                     : 1200 KB/s
+        Rx Throughput                     : 800 KB/s
+"""
+
+
+def test_nvidia_smi_pci_view_keeps_only_link_numbers() -> None:
+    assert pcie.parse_smi_pci(SMI_PCI) == {
+        "0000:70:00.0": {
+            "gen_max": 4, "gen_current": 4, "gen_device_current": 4, "gen_device_max": 5,
+            "gen_host_max": 4, "width_max": 16, "width_current": 16, "replays": 7,
+            "replay_rollovers": 0, "tx_kb_s": 1200, "rx_kb_s": 800,
+        }
+    }  # fmt: skip
+
+
+def test_link_registers_and_aer_by_type(tmp_path: Path) -> None:
+    cfg = bytearray(_config(5))
+    cfg[0x60 + 0x0C : 0x60 + 0x10] = (5 | 16 << 4).to_bytes(4, "little")  # LnkCap Gen5 x16
+    cfg[0x60 + 0x12 : 0x60 + 0x14] = (4 | 16 << 4 | 1 << 13 | 1 << 14).to_bytes(2, "little")
+    cfg[0x60 + 0x32] = 1 << 1  # equalization complete
+    regs = pcie.link_regs(bytes(cfg))
+    assert regs is not None
+    assert (regs["cap_gen"], regs["gen"], regs["width"], regs["target_gen"]) == (5, 4, 16, 5)
+    assert regs["dl_active"] and regs["bw_mgmt_status"] and regs["eq_complete"]
+    assert pcie.link_regs(bytes(cfg[:64])) is None
+    _sysfs(tmp_path, cor=913)
+    aer = pcie.aer_counts(tmp_path, "0000:41:00.0")
+    assert aer is not None and aer["correctable"] == {"RxErr": 913, "total": 913}
+    assert aer["nonfatal"] == {"total": 0}
+    (snap,) = pcie.debug_snapshot(tmp_path, ["0000:41:00.0"])
+    assert snap["port"]["addr"] == "0000:40:01.1" and snap["gpu"]["gen"] == 4
+    firmware = "[ 2.2] h kernel: acpi PNP0A08:00: _OSC: platform does not support [AER LTR DPC]\n"
+    assert pcie.parse_kernel_events(firmware)["aer_native"] is False

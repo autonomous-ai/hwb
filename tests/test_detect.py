@@ -9,6 +9,7 @@ from hwb.detect.gpu import (
     check_bound,
     check_nvidia_smi,
     check_pci,
+    check_pcie_kernel,
     check_pcie_link,
     parse_driver_version,
     scan_pci,
@@ -202,3 +203,32 @@ def test_pcie_generation_lost_to_link_errors_is_not_blamed_on_the_bios() -> None
     rows = [_row(**{"pci.bus_id": "00000000:70:00.0", "pcie.link.gen.max": "5"})]
     r = check_pcie_link(GpuFacts(smi_rows=rows, pcie_links=[_limit("0000:70:00.0", 5, 5, 5, 3)]))
     assert r.status is Status.WARN and r.summary == "correctable PCIe errors since boot: GPU0 3"
+
+
+def test_kernel_pcie_errors_warn_with_when_and_where() -> None:
+    k = {
+        "lines": 4, "corrected": 913, "uncorrected": 0, "error_types": {"RxErr": 905, "BadTLP": 8},
+        "devices": {"0000:6f:01.0": 913}, "first_s": 1180.2, "last_s": 4300.0, "sample": [],
+    }  # fmt: skip
+    debug = [{"gpu": {"addr": "0000:70:00.0"}, "port": {"addr": "0000:6f:01.0"}}]
+    r = check_pcie_kernel(GpuFacts(kernel_pcie=k, pcie_debug=debug))
+    assert r.status is Status.WARN
+    assert r.summary == (
+        "kernel logged 913 PCIe error messages this boot (RxErr 905, BadTLP 8) on GPU port "
+        "0000:6f:01.0, first 1180 s after boot, last 4300 s"
+    )
+    clean = {**k, "corrected": 0, "lines": 0, "error_types": {}, "devices": {}}
+    assert check_pcie_kernel(GpuFacts(kernel_pcie=clean)).status is Status.PASS
+    assert check_pcie_kernel(GpuFacts()).status is Status.SKIP
+    cooling = [{"type": "PCIe_Port_Link_Speed_0000:6f:01.0", "cur_state": 1, "max_state": 3}]
+    r = check_pcie_kernel(GpuFacts(kernel_pcie=clean, pcie_cooling=cooling))
+    assert r.status is Status.WARN and "slows a PCIe link (state 1)" in r.summary
+
+
+def test_bios_cap_is_not_claimed_when_the_firmware_hides_errors() -> None:
+    rows = [_row(**{"pci.bus_id": "00000000:70:00.0", "pcie.link.gen.max": "4"})]
+    links = [_limit("0000:70:00.0", 5, 5, 4, 0)]
+    r = check_pcie_link(
+        GpuFacts(smi_rows=rows, pcie_links=links, kernel_pcie={"aer_native": False})
+    )
+    assert "set in the BIOS" not in r.summary and "firmware handles AER" in r.summary

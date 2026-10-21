@@ -235,11 +235,136 @@ export function Inventory({ inv }: { inv: Row }) {
   );
 }
 
+function gen(v: unknown): string {
+  return num(v) !== null ? `Gen${String(v)}` : "—";
+}
+
+function aer(v: unknown): string {
+  const cor = obj(obj(v).correctable);
+  const n = num(cor.total);
+  if (n === null) return "—";
+  const kinds = Object.entries(cor)
+    .filter(([k]) => k !== "total")
+    .map(([k, c]) => `${k} ${String(c)}`);
+  return kinds.length ? `${n} (${kinds.join(", ")})` : String(n);
+}
+
+const LINK_HEADERS = ["GPU", "Card max", "Slot max", "Slot set to", "Now", "nvidia-smi host max", "Replays", "AER card", "AER port"];
+
+// Both ends of each GPU's link: what the card, the slot and its setting allow, what it runs at,
+// and the errors since boot. Register fields need root; "—" means hwb could not read them.
+function PcieLinks({ links, smi }: { links: Row[]; smi: Row }) {
+  return (
+    <>
+      <TableWrap>
+        <table>
+          <thead>
+            <tr>
+              {LINK_HEADERS.map((h) => (
+                <th key={h}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {links.map((l, i) => {
+              const g = obj(l.gpu);
+              const p = obj(l.port);
+              const regs = obj(p.regs);
+              const s = obj(smi[String(g.addr)]);
+              const target = num(regs.target_gen);
+              const slot = Math.min(num(g.max_gen) ?? Infinity, num(p.max_gen) ?? Infinity);
+              const capped = target !== null && target < slot;
+              const errors = (num(obj(obj(g.aer).correctable).total) ?? 0) + (num(obj(obj(p.aer).correctable).total) ?? 0);
+              return (
+                <tr key={i}>
+                  <td>
+                    <code>{String(g.addr ?? "?")}</code>
+                  </td>
+                  <td>
+                    {gen(g.max_gen)} x{String(g.max_width ?? "?")}
+                  </td>
+                  <td>{gen(p.max_gen)}</td>
+                  <td className={capped ? "bad" : undefined}>{gen(regs.target_gen)}</td>
+                  <td>
+                    {gen(g.gen)} x{String(g.width ?? "?")}
+                  </td>
+                  <td>{gen(s.gen_host_max)}</td>
+                  <td className={`num${num(s.replays) ? " bad" : ""}`}>{num(s.replays) ?? "—"}</td>
+                  <td className={errors ? "bad" : undefined}>{aer(g.aer)}</td>
+                  <td className={errors ? "bad" : undefined}>{aer(p.aer)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </TableWrap>
+      <p className="muted small">Idle GPUs drop their link to Gen1 to save power; "Now" matters only under load.</p>
+    </>
+  );
+}
+
+function KernelPcie({ k, cooling }: { k: Row; cooling: Row[] }) {
+  const lines = Array.isArray(k.sample) ? (k.sample as [number, string][]) : [];
+  const types = Object.entries(obj(k.error_types)).map(([t, n]) => `${t} ${String(n)}`);
+  const devices = Object.entries(obj(k.devices)).map(([d, n]) => `${d} (${String(n)})`);
+  const active = cooling.filter((c) => num(c.cur_state));
+  const first = num(k.first_s);
+  const last = num(k.last_s);
+  return (
+    <>
+      <p>
+        {num(k.lines) ? (
+          <>
+            <strong>{String(k.lines)}</strong> PCIe/AER/Xid lines this boot: {String(k.corrected ?? 0)} corrected,{" "}
+            {String(k.uncorrected ?? 0)} uncorrected
+            {first !== null && last !== null && `, from ${Math.round(first)} s to ${Math.round(last)} s after boot`}
+          </>
+        ) : (
+          "No PCIe errors in the kernel log this boot."
+        )}
+      </p>
+      {k.aer_native === false && (
+        <p className="muted small">
+          The firmware handles PCIe errors (AER), so the OS never sees corrected ones: zero counts here and in the AER
+          columns prove nothing.
+        </p>
+      )}
+      {types.length > 0 && <p className="muted small">Error types: {types.join(", ")}</p>}
+      {devices.length > 0 && <p className="muted small">Devices: {devices.join(", ")}</p>}
+      {active.length > 0 && (
+        <p className="bad">
+          Kernel PCIe link-speed cooling active:{" "}
+          {active.map((c) => `${String(c.type)} state ${String(c.cur_state)}`).join(", ")}
+        </p>
+      )}
+      {lines.length > 0 && (
+        <details className="data">
+          <summary>
+            Kernel lines ({lines.length < (num(k.lines) ?? 0) ? `first and last ${lines.length}` : lines.length})
+          </summary>
+          <pre className="log">{lines.map(([t, m]) => `[${t.toFixed(1).padStart(8)}] ${m}`).join("\n")}</pre>
+        </details>
+      )}
+    </>
+  );
+}
+
 export function DriverFacts({ facts, showSmi }: { facts: Row; showSmi: boolean }) {
-  const { smi_rows, ...rest } = facts;
+  const { smi_rows, pcie_debug, smi_pci, kernel_pcie, pcie_cooling, ...rest } = facts;
   const smi = rows(smi_rows);
+  const links = rows(pcie_debug);
   return (
     <div className="grid">
+      {links.length > 0 && (
+        <Card wide title="PCIe links">
+          <PcieLinks links={links} smi={obj(smi_pci)} />
+        </Card>
+      )}
+      {kernel_pcie !== null && kernel_pcie !== undefined && (
+        <Card wide title="Kernel PCIe log">
+          <KernelPcie k={obj(kernel_pcie)} cooling={rows(pcie_cooling)} />
+        </Card>
+      )}
       <Card wide title="Driver facts">
         {showSmi && smi.length > 0 && <GpuTable gpus={smi} />}
         <KV data={rest} />

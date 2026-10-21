@@ -302,3 +302,4 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
 .pcie-table caption { text-align: left; font-weight: 600; font-size: 14px; padding: 14px 0 6px; }
 .serve-checks caption, .serve-load caption { text-align: left; font-weight: 600; font-size: 14px; padding: 14px 0 6px; }
 .serve-checks code.answer { white-space: pre-wrap; word-break: break-word; font-size: 12px; }
+pre.log { margin-top: 8px; max-height: 420px; overflow: auto; font-size: 12px; background: var(--tint); padding: 10px 12px; border-radius: 4px; white-space: pre; }

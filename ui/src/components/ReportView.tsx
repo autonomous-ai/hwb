@@ -13,7 +13,7 @@ import {
 } from "../format";
 import type { CheckResult, Row, Status } from "../types";
 import { BenchPanel } from "./Bench";
-import { KV, Value } from "./Data";
+import { KV, TableWrap, Value } from "./Data";
 import { Card, DriverFacts, InstallPlan, Inventory } from "./Sections";
 import { TabPanel, Tabs, type TabItem } from "./Tabs";
 
@@ -111,7 +111,7 @@ function Attention({ view, results }: { view: View; results: CheckResult[] }) {
     .sort((a, b) => rank(a.status) - rank(b.status));
   if (!items.length) return <p className="all-clear">Nothing needs attention: no failures, errors or warnings.</p>;
   return (
-    <div className="table-wrap">
+    <TableWrap>
       <table className="attention">
         <thead>
           <tr>
@@ -132,19 +132,19 @@ function Attention({ view, results }: { view: View; results: CheckResult[] }) {
                   <code>{r.name}</code>
                 </a>
               </td>
-              <td>{r.summary}</td>
-              <td>{r.hint ?? "—"}</td>
+              <td className="text">{r.summary}</td>
+              <td className="text todo">{r.hint ?? "—"}</td>
             </tr>
           ))}
         </tbody>
       </table>
-    </div>
+    </TableWrap>
   );
 }
 
 function RunsTable({ runs }: { runs: Run[] }) {
   return (
-    <div className="table-wrap">
+    <TableWrap>
       <table className="runs">
         <thead>
           <tr>
@@ -182,7 +182,7 @@ function RunsTable({ runs }: { runs: Run[] }) {
           })}
         </tbody>
       </table>
-    </div>
+    </TableWrap>
   );
 }
 

@@ -3,7 +3,7 @@
 import type { ReactNode } from "react";
 import { num, tempClass } from "../format";
 import type { Row } from "../types";
-import { Dash, KV, Table, Value, type Columns } from "./Data";
+import { Dash, KV, Table, TableWrap, Value, type Columns } from "./Data";
 
 function obj(v: unknown): Row {
   return typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Row) : {};
@@ -28,7 +28,7 @@ export function Temp({ c }: { c: number }) {
 
 export function GpuTable({ gpus }: { gpus: Row[] }) {
   return (
-    <div className="table-wrap">
+    <TableWrap>
       <table>
         <thead>
           <tr>
@@ -74,7 +74,7 @@ export function GpuTable({ gpus }: { gpus: Row[] }) {
           })}
         </tbody>
       </table>
-    </div>
+    </TableWrap>
   );
 }
 

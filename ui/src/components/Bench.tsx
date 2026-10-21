@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import { label as keyLabel } from "../format";
 import type { Row } from "../types";
 import { LineChart, SLOTS, type Line, type Phase } from "./Chart";
-import { Dash, KV } from "./Data";
+import { Dash, KV, TableWrap } from "./Data";
 
 interface Series {
   key: string;
@@ -82,7 +82,7 @@ function Tiles({ items }: { items: [string, string | null, string?][] }) {
   return (
     <dl className="stat-tiles">
       {shown.map(([k, v, sub]) => (
-        <div key={k}>
+        <div key={k} className={v!.length > 18 ? "long" : undefined}>
           <dt>{k}</dt>
           <dd>{v}</dd>
           {sub && <dd className="stat-sub">{sub}</dd>}
@@ -97,7 +97,7 @@ function PcieTable({ pcie }: { pcie: unknown }) {
   const rows = Object.entries(pcie as Record<string, Row>);
   const val = (v: unknown, prefix = "") => (v === null || v === undefined ? <Dash /> : `${prefix}${String(v)}`);
   return (
-    <div className="table-wrap">
+    <TableWrap>
       <table className="pcie-table">
         <caption>GPU PCIe links</caption>
         <thead>
@@ -134,7 +134,7 @@ function PcieTable({ pcie }: { pcie: unknown }) {
           })}
         </tbody>
       </table>
-    </div>
+    </TableWrap>
   );
 }
 
@@ -145,7 +145,7 @@ function ServeTables({ b }: { b: Row }) {
   return (
     <>
       {checks.length > 0 && (
-        <div className="table-wrap">
+        <TableWrap>
           <table className="serve-checks">
             <caption>Answer checks (reasoning off, temperature 0)</caption>
             <thead>
@@ -164,7 +164,7 @@ function ServeTables({ b }: { b: Row }) {
                     <span className={`pill ${String(c.status)}`}>{String(c.status)}</span>
                     {c.detail ? <span className="finding-hint"> {String(c.detail)}</span> : null}
                   </td>
-                  <td>
+                  <td className="text">
                     <code className="answer">{String(c.answer ?? "")}</code>
                   </td>
                   <td className="num">{ms(num(c.ttft_s) === null ? null : num(c.ttft_s)! * 1000)}</td>
@@ -172,10 +172,10 @@ function ServeTables({ b }: { b: Row }) {
               ))}
             </tbody>
           </table>
-        </div>
+        </TableWrap>
       )}
       {levels.length > 0 && (
-        <div className="table-wrap">
+        <TableWrap>
           <table className="serve-load">
             <caption>Load test ({String(levels[0]?.requests ?? "")}+ requests per level, fixed output length)</caption>
             <thead>
@@ -209,7 +209,7 @@ function ServeTables({ b }: { b: Row }) {
               ))}
             </tbody>
           </table>
-        </div>
+        </TableWrap>
       )}
       {Array.isArray(b.command) && (
         <details className="data">
@@ -312,7 +312,7 @@ function PhaseTable({ phases }: { phases: unknown }) {
   const rows = Object.entries(phases as Record<string, Row>);
   const cell = (v: unknown, d: number, unit: string) => fmt(v, d, unit) ?? <Dash />;
   return (
-    <div className="table-wrap">
+    <TableWrap>
       <table className="phase-table">
         <caption>Per-phase summary</caption>
         <thead>
@@ -338,7 +338,7 @@ function PhaseTable({ phases }: { phases: unknown }) {
           ))}
         </tbody>
       </table>
-    </div>
+    </TableWrap>
   );
 }
 

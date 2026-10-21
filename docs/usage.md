@@ -234,6 +234,8 @@ Shares the runs in `--out` through the public [hwb gateway](../gateway/README.md
 2. **Preview.** hwb lists the runs, how the rig will appear, what was removed and the destination.
 3. **Confirm.** Nothing is sent until you answer `y`. Without a terminal, `--yes` is required. `--dry-run` writes the exact upload to `<out>/submission-preview.json` and sends nothing.
 4. **Upload.** You get `https://<gateway>/r/<uuid>` and a QR code. The report is unlisted: only people with the link can open it.
+   - The QR code is drawn with colored spaces, so it scans on any terminal, including SSH sessions with a C locale, the Linux console and IPMI/KVM consoles. On a terminal too short for it, hwb draws a half-height version with Unicode half blocks if the terminal supports them.
+   - Force a style with `HWB_QR=full|half|ascii|off`. The same code is always available as an image at `https://<gateway>/r/<uuid>/qr.svg`.
 
 The delete token is appended to `<out>/submissions.jsonl` (mode 0600). `hwb submit --delete <id>` removes the report from the gateway. The gateway also deletes reports after its retention period (90 days by default).
 

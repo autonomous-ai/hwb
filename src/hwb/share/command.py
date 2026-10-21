@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -100,9 +101,17 @@ def submit_runs(
     log.info("submitted report %s", sub.id)
 
     color = sys.stdout.isatty() and "NO_COLOR" not in os.environ
+    style = client.qr_style(
+        os.environ, sys.stdout.encoding, color=color, size=len(sub.qr),
+        lines=shutil.get_terminal_size().lines,
+    )  # fmt: skip
     print(f"\nReport: {sub.url}\n")
-    print(client.render_qr(sub.qr, color=color))
-    print()
+    if style != "off":
+        print(client.render_qr(sub.qr, color=color, style=style))
+        print()
+    print(
+        f"QR code as an image: {sub.url}/qr.svg  (if the one above does not scan: {client.ENV_QR}=full)"
+    )
     if sub.retention_days:
         print(f"Kept for {sub.retention_days} days.")
     print(f"Delete it with: hwb --out {out} submit --delete {sub.id}  (token saved in {saved})")

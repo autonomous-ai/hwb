@@ -80,6 +80,8 @@ def submit_runs(
     print(
         "Removed before upload: " + ("; ".join(removed) if removed else "nothing identifying found")
     )
+    if '"gpu_serial": "' in json.dumps(bundle):
+        print("Kept: GPU serial numbers, to tell which card sat in which slot")
     size = len(client.encode_bundle(bundle))
     if size > client.MAX_UPLOAD_BYTES:
         raise HwbError(

@@ -29,8 +29,8 @@ export function landingPage() {
     "hwb gateway",
     `<h1>hwb gateway</h1>
 <p>Shares <a href="https://github.com/autonomous-ai/hwb">hwb</a> GPU server acceptance reports.
-Anyone can submit with <code>hwb submit</code>; host names, addresses, serials and paths are
-removed first. Reports are unlisted: each one is reachable only through the link printed when it
+Anyone can submit with <code>hwb submit</code>; host names, addresses, serials (except
+GPU serials) and paths are removed first. Reports are unlisted: each one is reachable only through the link printed when it
 was submitted, and expires after 90 days.</p>`,
   );
 }

@@ -57,7 +57,7 @@ Each run also writes its own files to `./hwb-runs/<UTC time>-<host>-<command>/`:
 | `hwb.log.jsonl` | audit log: every command hwb executed, with exit code, duration and output |
 
 `hwb submit` uploads to the public [hwb gateway](gateway/README.md), a Cloudflare Worker in this repo. No account is needed.
-- It removes host names, addresses, serials, GPU UUIDs and user paths.
+- It removes host names, addresses, GPU UUIDs, user paths and serials other than the GPUs' own (kept to track a card across slots).
 - It shows what will be sent and asks for confirmation.
 - It prints a link and a QR code.
 

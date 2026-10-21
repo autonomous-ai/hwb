@@ -258,3 +258,17 @@ def test_bios_cap_is_not_claimed_when_the_firmware_hides_errors() -> None:
         GpuFacts(smi_rows=rows, pcie_links=links, kernel_pcie={"aer_native": False})
     )
     assert "set in the BIOS" not in r.summary and "firmware handles AER" in r.summary
+
+
+def test_pcie_link_names_the_card_by_serial() -> None:
+    rows = [
+        _row(
+            **{
+                "pci.bus_id": "00000000:70:00.0",
+                "pcie.link.gen.max": "4",
+                "gpu_serial": "1652724012345",
+            }
+        )
+    ]
+    r = check_pcie_link(GpuFacts(smi_rows=rows, pcie_links=[_limit("0000:70:00.0", 5, 5, 5, 0)]))
+    assert r.summary.startswith("PCIe generation limited: GPU0 (SN 1652724012345) Gen4 of Gen5")

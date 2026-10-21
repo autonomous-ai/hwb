@@ -51,7 +51,7 @@ gateway/               Cloudflare Worker (JS): R2 report store, D1 analysis tabl
 6. **Isolate failures.** Wrap each check or collector in `ctx.check(...)`, so one crash yields an ERROR result and the rest of the suite still runs. Catch `Exception` only at these isolation boundaries, always log with `exc_info`, and add a comment giving the reason.
 7. **Gather, then judge.** Probes read the machine into a facts dataclass. Checks are pure functions over the facts, which makes them unit-testable on macOS with synthetic inputs.
 8. **Long-running children** (vLLM server, burn tests) run in their own process group and are torn down in `finally`. SIGTERM is routed to `KeyboardInterrupt` in `cli.main`, so cleanup and the report still happen.
-9. **Privacy:** don't collect serial numbers, MACs or IPs into reports. Reports may be shared with vendors. Anything that leaves the machine (`hwb submit`) goes through `share/sanitize.py`, then the gateway's own scrub. A new field that could identify a host, person or unit needs a rule in **both** sanitizers and a test.
+9. **Privacy:** don't collect serial numbers, MACs or IPs into reports. The one exception is the GPU serial (`gpu_serial`, from nvidia-smi), kept on purpose even in shared reports: bus IDs belong to slots, the serial tracks the card. Reports may be shared with vendors. Anything that leaves the machine (`hwb submit`) goes through `share/sanitize.py`, then the gateway's own scrub. A new field that could identify a host, person or unit needs a rule in **both** sanitizers and a test.
 10. Package names, driver branches and NVIDIA repo URLs drift. Keep them as named constants at the top of `install/plan.py`, not inline.
 
 ## CI / release

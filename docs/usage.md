@@ -64,7 +64,7 @@ Read-only. First the GPU driver and CUDA health checks (see the [check reference
   - Each server's own `/v1/models` on localhost is asked what it serves.
   - Full command lines are never stored, because they can contain API keys; local model paths are reduced to their last part.
 
-Serial numbers, MAC addresses and IPs are deliberately not collected.
+MAC addresses, IPs and serial numbers are deliberately not collected. The one exception is each GPU's serial (from nvidia-smi, `gpu_serial`): bus IDs belong to slots, so the serial is what tells which physical card sat where across reports and swaps. It stays in shared reports.
 
 ```bash
 hwb                  # same as: hwb info
@@ -230,7 +230,7 @@ hwb [--out DIR] submit --delete ID [-y]
 
 Shares the runs in `--out` through the public [hwb gateway](../gateway/README.md) (`https://hwb-gateway.autonomous-ai.workers.dev`, no account or token needed) and prints the link plus a QR code to scan. The page looks just like `report.html`.
 
-1. **Sanitize, on the rig.** The host name becomes a stable alias (`rig-1a2b3c4d`). GPU UUIDs, serials, MAC/IP/email addresses, home directory paths and Xid process names are removed. The gateway checks all of this again.
+1. **Sanitize, on the rig.** The host name becomes a stable alias (`rig-1a2b3c4d`). GPU UUIDs, serials (except GPU serials, kept to track a card), MAC/IP/email addresses, home directory paths and Xid process names are removed. The gateway checks all of this again.
 2. **Preview.** hwb lists the runs, how the rig will appear, what was removed and the destination.
 3. **Confirm.** Nothing is sent until you answer `y`. Without a terminal, `--yes` is required. `--dry-run` writes the exact upload to `<out>/submission-preview.json` and sends nothing.
 4. **Upload.** You get `https://<gateway>/r/<uuid>` and a QR code. The report is unlisted: only people with the link can open it.

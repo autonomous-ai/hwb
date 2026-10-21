@@ -32,7 +32,7 @@ export function GpuTable({ gpus }: { gpus: Row[] }) {
       <table>
         <thead>
           <tr>
-            {["#", "Model", "Memory", "SM", "Driver", "PCIe", "Temp", "Power limit", "Persistence", "Bus ID"].map(
+            {["#", "Model", "Memory", "SM", "Driver", "PCIe", "Temp", "Power limit", "Persistence", "Bus ID", "Serial"].map(
               (h) => (
                 <th key={h}>{h}</th>
               ),
@@ -69,6 +69,7 @@ export function GpuTable({ gpus }: { gpus: Row[] }) {
                 <td>
                   <code>{String(g["pci.bus_id"] ?? "—")}</code>
                 </td>
+                <td>{g.gpu_serial ? <code>{String(g.gpu_serial)}</code> : <Dash />}</td>
               </tr>
             );
           })}
@@ -249,11 +250,18 @@ function aer(v: unknown): string {
   return kinds.length ? `${n} (${kinds.join(", ")})` : String(n);
 }
 
+// nvidia-smi bus IDs carry an 8-digit domain (00000000:70:00.0); sysfs uses 4 (0000:70:00.0)
+function serialsByAddr(smi: Row[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const g of smi) if (g.gpu_serial && g["pci.bus_id"]) out[String(g["pci.bus_id"]).slice(-12).toLowerCase()] = String(g.gpu_serial);
+  return out;
+}
+
 const LINK_HEADERS = ["GPU", "Card max", "Slot max", "Slot set to", "Now", "nvidia-smi host max", "Replays", "AER card", "AER port"];
 
 // Both ends of each GPU's link: what the card, the slot and its setting allow, what it runs at,
 // and the errors since boot. Register fields need root; "—" means hwb could not read them.
-function PcieLinks({ links, smi }: { links: Row[]; smi: Row }) {
+function PcieLinks({ links, smi, serials }: { links: Row[]; smi: Row; serials: Record<string, string> }) {
   return (
     <>
       <TableWrap>
@@ -279,6 +287,7 @@ function PcieLinks({ links, smi }: { links: Row[]; smi: Row }) {
                 <tr key={i}>
                   <td>
                     <code>{String(g.addr ?? "?")}</code>
+                    {serials[String(g.addr)] && <div className="muted small">SN {serials[String(g.addr)]}</div>}
                   </td>
                   <td>
                     {gen(g.max_gen)} x{String(g.max_width ?? "?")}
@@ -360,7 +369,7 @@ export function DriverFacts({ facts, showSmi }: { facts: Row; showSmi: boolean }
     <div className="grid">
       {links.length > 0 && (
         <Card wide title="PCIe links">
-          <PcieLinks links={links} smi={obj(smi_pci)} />
+          <PcieLinks links={links} smi={obj(smi_pci)} serials={serialsByAddr(smi)} />
         </Card>
       )}
       {kernel_pcie !== null && kernel_pcie !== undefined && (

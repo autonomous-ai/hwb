@@ -43,3 +43,11 @@ def test_dmidecode_skips_empty_slots() -> None:
     )
     dimms = parse_dmidecode_memory(text)
     assert [d["locator"] for d in dimms] == ["DIMM_A1"]
+
+
+def test_gpu_serial_gets_its_own_key_and_na_is_none() -> None:
+    rows = parse_csv("0, [N/A]\n1, 1652724012345\n", ("index", "serial"))
+    assert rows == [
+        {"index": "0", "gpu_serial": None},
+        {"index": "1", "gpu_serial": "1652724012345"},
+    ]

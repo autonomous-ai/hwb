@@ -241,3 +241,24 @@ def test_link_registers_and_aer_by_type(tmp_path: Path) -> None:
     assert snap["port"]["addr"] == "0000:40:01.1" and snap["gpu"]["gen"] == 4
     firmware = "[ 2.2] h kernel: acpi PNP0A08:00: _OSC: platform does not support [AER LTR DPC]\n"
     assert pcie.parse_kernel_events(firmware)["aer_native"] is False
+
+
+def test_cooling_devices_report_the_thermal_zones_that_drive_them(tmp_path: Path) -> None:
+    thermal = tmp_path / "sys/class/thermal"
+    for n, kind, state in ((0, "Processor", 0), (1, "PCIe_Port_Link_Speed_0000:6f:01.0", 4),
+                           (2, "PCIe_Port_Link_Speed_0000:15:01.0", 1)):  # fmt: skip
+        d = thermal / f"cooling_device{n}"
+        d.mkdir(parents=True)
+        (d / "type").write_text(kind + "\n")
+        (d / "cur_state").write_text(f"{state}\n")
+        (d / "max_state").write_text("4\n")
+    zone = thermal / "thermal_zone0"
+    zone.mkdir()
+    (zone / "type").write_text("acpitz\n")
+    (zone / "cdev0").symlink_to(thermal / "cooling_device2")
+    (zone / "cdev0_trip_point").write_text("1\n")
+    idle, bound = pcie.cooling_devices(tmp_path)
+    assert idle == {
+        "type": "PCIe_Port_Link_Speed_0000:6f:01.0", "cur_state": 4, "max_state": 4, "zones": [],
+    }  # fmt: skip
+    assert bound["zones"] == ["acpitz"]

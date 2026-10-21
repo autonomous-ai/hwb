@@ -65,6 +65,9 @@ _AER_NAMES = (
     "|AtomicOpBlocked|TLPBlockedErr|PoisonTLPBlocked|DMWrReqBlocked|IDECheck|MisIDETLP|PCRC_CHECK"
 )
 _ERR_TYPE = re.compile(rf"\[\s*\d+\]\s+({_AER_NAMES})\b")
+_CORRECTABLE = frozenset(
+    {"RxErr", "BadTLP", "BadDLLP", "Rollover", "Timeout", "NonFatalErr", "CorrIntErr", "HeaderOF"}
+)
 _PCIE_EVENT = re.compile(
     rf"AER|PCIe Bus Error|error status/mask|{_ERR_TYPE.pattern}|bwctrl"
     r"|NVRM: (?:Xid|GPU at PCI|.*fallen off)"
@@ -270,11 +273,14 @@ def parse_kernel_events(text: str) -> dict[str, Any]:
     devices = Counter(a.group(1) for _, msg in events if (a := _ADDR_IN_TEXT.search(msg)))
     head, tail = _KERNEL_KEEP
     keep = events if len(events) <= head + tail else events[:head] + events[-tail:]
+    # some kernels log only the "[ 0] RxErr" bit lines, without the "severity=" header line
+    bits_corr = sum(n for t, n in types.items() if t in _CORRECTABLE)
+    bits_uncorr = sum(n for t, n in types.items() if t not in _CORRECTABLE and t != "Undefined")
     return {
         "aer_native": aer_native,
         "lines": len(events),
-        "corrected": sum("severity=Correct" in msg for _, msg in events),
-        "uncorrected": sum("severity=Uncorrect" in msg for _, msg in events),
+        "corrected": max(sum("severity=Correct" in msg for _, msg in events), bits_corr),
+        "uncorrected": max(sum("severity=Uncorrect" in msg for _, msg in events), bits_uncorr),
         "error_types": dict(types.most_common()),
         "devices": dict(devices.most_common()),
         "first_s": events[0][0] if events else None,

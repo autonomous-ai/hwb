@@ -413,6 +413,9 @@ def _int(v: object) -> int | None:
     return int(str(v)) if v is not None and str(v).strip().isdigit() else None
 
 
+_BUSY_KB_S = 100_000  # PCIe traffic (rx + tx) above which the link must run at full speed
+
+
 @needs_host_driver
 def check_pcie_link(f: GpuFacts) -> CheckResult:
     """Width below the card's (wiring, bifurcation, riser), generation capped below what card and
@@ -441,6 +444,12 @@ def check_pcie_link(f: GpuFacts) -> CheckResult:
             errors.append(f"{gpu} {lim.errors}")
         slot = lim.slot_gen or lim.gpu_gen
         low = lim.target_gen if lim.target_capped else smi_gen
+        # the current generation counts only while the link carries traffic (idle drops to Gen1)
+        now = (f.smi_pci or {}).get(lim.addr) or {}
+        if (now.get("rx_kb_s") or 0) + (now.get("tx_kb_s") or 0) >= _BUSY_KB_S and now.get(
+            "gen_current"
+        ):
+            low = min(low or slot, now["gen_current"])
         if lim.port_gen and lim.port_gen < lim.gpu_gen:
             notes.append(
                 f"{gpu} Gen{lim.port_gen} card Gen{lim.gpu_gen}: the slot is Gen{lim.port_gen}"

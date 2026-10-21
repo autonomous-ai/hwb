@@ -272,3 +272,17 @@ def test_pcie_link_names_the_card_by_serial() -> None:
     ]
     r = check_pcie_link(GpuFacts(smi_rows=rows, pcie_links=[_limit("0000:70:00.0", 5, 5, 5, 0)]))
     assert r.summary.startswith("PCIe generation limited: GPU0 (SN 1652724012345) Gen4 of Gen5")
+
+
+def test_link_running_slow_under_traffic_fell_back() -> None:
+    rows = [_row(**{"pci.bus_id": "00000000:70:00.0", "pcie.link.gen.max": "5"})]
+    busy = {"0000:70:00.0": {"gen_current": 4, "rx_kb_s": 746_000, "tx_kb_s": 70_000}}
+    links = [_limit("0000:70:00.0", 5, 5, 5, 34)]
+    r = check_pcie_link(GpuFacts(smi_rows=rows, pcie_links=links, smi_pci=busy))
+    assert r.summary.startswith(
+        "PCIe generation limited: GPU0 Gen4 of Gen5: fell back after link errors"
+    )
+    assert "marginal" in (r.hint or "")
+    idle = {"0000:70:00.0": {"gen_current": 1, "rx_kb_s": 500, "tx_kb_s": 700}}
+    r = check_pcie_link(GpuFacts(smi_rows=rows, pcie_links=links, smi_pci=idle))
+    assert r.summary == "correctable PCIe errors since boot: GPU0 34"

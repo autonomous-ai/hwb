@@ -20,7 +20,7 @@
   --nav-h: 44px;
 }
 * { box-sizing: border-box; }
-html { scroll-padding-top: calc(var(--nav-h) + 12px); }
+html { scroll-padding-top: calc(var(--nav-h) + 12px); -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 body {
   margin: 0;
   background: var(--paper);
@@ -139,14 +139,14 @@ button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px soli
 .chips .tile b { font-size: 15px; }
 .source { margin: 2px 0 0; font-size: 13px; color: var(--muted); }
 .check.focus { outline: 2px solid var(--link); outline-offset: -2px; }
-.num { text-align: right; font-variant-numeric: tabular-nums; }
+.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .tools { display: flex; gap: 8px; flex-wrap: wrap; }
 input[type="search"] {
   font: inherit; color: var(--ink); background: var(--paper);
   border: 1px solid #b8bec6; border-radius: 4px; padding: 5px 10px; min-width: 220px;
 }
 input[type="search"]:focus { outline: 2px solid var(--link); outline-offset: 1px; }
-.groups { display: grid; gap: 22px; }
+.groups { display: grid; grid-template-columns: minmax(0, 1fr); gap: 22px; }
 .group header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 6px; border-bottom: 1px solid var(--heavy); }
 .group h3 { margin: 0; }
 .minis { display: flex; gap: 6px; }
@@ -171,11 +171,10 @@ details.data[open] > summary { margin-bottom: 6px; }
 .data-body { background: var(--paper); border: 1px solid var(--rule); border-radius: 4px; padding: 10px 12px; }
 
 /* generic data */
-.kv { display: grid; grid-template-columns: minmax(110px, max-content) minmax(0, 1fr); gap: 3px 16px; margin: 0; }
+.kv { display: grid; grid-template-columns: fit-content(40%) minmax(0, 1fr); gap: 3px 16px; margin: 0; }
 .kv-row { display: contents; }
-.kv dt { color: var(--muted); font-size: 14px; }
+.kv dt { color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }
 .kv dd { margin: 0; word-break: break-word; }
-.kv .kv { grid-template-columns: minmax(90px, max-content) minmax(0, 1fr); }
 .tags { display: flex; flex-wrap: wrap; gap: 4px; }
 .tags span { font-family: var(--mono); font-size: 12px; padding: 0 6px; border-radius: 3px; background: var(--tint); border: 1px solid var(--rule); }
 .lines { margin: 0; padding-left: 18px; font-family: var(--mono); font-size: 12px; }
@@ -183,7 +182,15 @@ details.data[open] > summary { margin-bottom: 6px; }
 .card { min-width: 0; }
 .card > h3 { padding-bottom: 6px; border-bottom: 1px solid var(--heavy); }
 .card.wide { grid-column: 1 / -1; }
+.table-scroll { position: relative; }
 .table-wrap { overflow-x: auto; }
+/* Fades on the sides that still have columns to scroll to. */
+.table-scroll::before, .table-scroll::after {
+  content: ""; position: absolute; top: 0; bottom: 0; width: 28px; pointer-events: none; opacity: 0; transition: opacity 0.15s; z-index: 1;
+}
+.table-scroll::before { left: 0; background: linear-gradient(to right, var(--paper), rgb(255 255 255 / 0)); }
+.table-scroll::after { right: 0; background: linear-gradient(to left, var(--paper), rgb(255 255 255 / 0)); }
+.table-scroll.more-left::before, .table-scroll.more-right::after { opacity: 1; }
 table { border-collapse: collapse; width: 100%; font-size: 14px; }
 th { text-align: left; font-size: 13px; font-weight: 600; padding: 6px 10px; border-bottom: 1px solid var(--heavy); white-space: nowrap; }
 td { padding: 7px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; }
@@ -205,18 +212,21 @@ tbody tr:nth-child(even) td { background: var(--tint); }
 .raw button { margin-top: 10px; }
 .raw pre { margin-top: 10px; max-height: 480px; overflow: auto; font-size: 12px; background: var(--tint); padding: 10px 12px; border-radius: 4px; }
 /* benchmarks */
-.benches { display: grid; gap: 40px; }
+.benches { display: grid; grid-template-columns: minmax(0, 1fr); gap: 40px; }
 .bench-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding-bottom: 6px; border-bottom: 1px solid var(--heavy); margin-bottom: 14px; }
 .bench-head h3 { margin: 0; font-size: 17px; }
 .stat-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin: 0 0 14px; }
 .stat-tiles > div { border: 1px solid var(--rule); border-radius: 4px; padding: 8px 12px; }
 .stat-tiles dt { font-size: 13px; color: var(--muted); }
 .stat-tiles dd { margin: 2px 0 0; font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
-.stat-tiles dd.stat-sub { font-size: 12px; font-weight: 400; color: var(--muted); margin: 0; }
+.stat-tiles dd.stat-sub { font-size: 12px; font-weight: 400; color: var(--muted); margin: 0; overflow-wrap: anywhere; }
+/* A long value (a model id) gets two tiles' room and smaller type instead of a tower of broken words. */
+.stat-tiles > .long { grid-column: span 2; }
+.stat-tiles > .long dd:not(.stat-sub) { font-size: 16px; overflow-wrap: anywhere; }
 .findings { list-style: none; margin: 0 0 14px; padding: 0; display: grid; gap: 6px; }
 .finding { display: flex; gap: 10px; align-items: baseline; }
 .finding-hint { color: var(--muted); }
-.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 18px 28px; }
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); gap: 18px 28px; }
 .chart { margin: 0; min-width: 0; }
 .chart figcaption { display: flex; gap: 8px; align-items: baseline; margin-bottom: 4px; }
 .chart-title { font-weight: 600; font-size: 14px; }
@@ -256,7 +266,32 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
   .check-body { grid-column: 1 / -1; }
   input[type="search"] { min-width: 0; flex: 1; }
   .brand, .topnav .pill { display: none; }
-  .charts { grid-template-columns: 1fr; }
+  .charts { grid-template-columns: minmax(0, 1fr); }
+  main { padding-top: 20px; }
+  .section-tabs { flex-wrap: wrap; gap: 6px 20px; margin: 22px 0 18px; }
+  .section-tabs [role="tab"] { font-size: 15px; padding-bottom: 8px; }
+  .verdict { padding: 12px 14px; }
+  .verdict strong { font-size: 20px; }
+  .check { padding: 8px 4px; }
+  .toolbar { gap: 10px; }
+  .tools { width: 100%; }
+  th, td { padding-left: 8px; padding-right: 8px; }
+  /* Check details: each top-level label above its value, so nested data gets the full width. */
+  .data-body > .kv { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .data-body > .kv > .kv-row > dd { margin-bottom: 8px; }
+  /* Short values stay whole (the table scrolls); only prose cells wrap. */
+  td { white-space: nowrap; }
+  td.text { white-space: normal; min-width: 220px; }
+  /* Needs attention: one card per finding instead of a four-column table. */
+  .attention thead { display: none; }
+  .attention, .attention tbody { display: block; }
+  .attention tr { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 4px 10px; padding: 10px 8px; border-bottom: 1px solid var(--rule); }
+  .attention tbody tr td { padding: 0; border: 0; background: none; }
+  .attention td.text { grid-column: 1 / -1; min-width: 0; }
+  .attention td.todo { color: var(--muted); font-size: 14px; }
+  .attention td.todo::before { content: "What to do: "; font-weight: 600; color: var(--ink); }
+  .attention tr.row-fail, .attention tr.row-error { background: var(--fail-soft); }
+  .attention tr.row-warn { background: var(--warn-soft); }
 }
 @media print {
   .topnav, .section-tabs, .tools, .chips, .raw, .small { display: none; }

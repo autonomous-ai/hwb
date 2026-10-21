@@ -24,7 +24,10 @@ export interface Phase {
 
 const HEIGHT = 210;
 // Same right margin on every chart so side-by-side time axes line up (room for end labels).
-const M = { top: 22, bottom: 26, left: 46, right: 96 };
+const MARGIN = { top: 22, bottom: 26, left: 46, right: 96 };
+// Narrow charts (phones) drop the end labels (the legend names the lines) and their margin.
+const NARROW = 480;
+const M_NARROW = { ...MARGIN, left: 40, right: 12 };
 // Smallest y span per unit, so sensor noise (95.2 vs 95.4 °C) never fills the whole height.
 const MIN_SPAN: Record<string, number> = { "°C": 20, MHz: 500, W: 50, "": 4, errors: 5 };
 // Discrete states (link generation, cumulative counters) are drawn as steps, not slopes.
@@ -123,7 +126,9 @@ export function LineChart({
 }) {
   const [ref, width] = useWidth();
   const [hover, setHover] = useState<number | null>(null);
-  const endLabels = lines.length > 1 && lines.length <= 4;
+  const narrow = width < NARROW;
+  const M = narrow ? M_NARROW : MARGIN;
+  const endLabels = !narrow && lines.length > 1 && lines.length <= 4;
   const plotW = Math.max(width - M.left - M.right, 40);
   const plotH = HEIGHT - M.top - M.bottom;
   const t0 = t[0] ?? 0;
@@ -136,7 +141,7 @@ export function LineChart({
   const y = (v: number) => M.top + plotH - ((v - lo) / (hi - lo || 1)) * plotH;
   const xStep = niceStep(t1 - t0, Math.max(2, Math.floor(plotW / 90)));
   const xTicks: number[] = [];
-  for (let s = Math.ceil(t0 / xStep) * xStep; s <= t1; s += xStep) xTicks.push(s);
+  for (let s = 0; t0 + s <= t1; s += xStep) xTicks.push(t0 + s); // elapsed time: 0:00, 0:20, ...
 
   const nearest = (clientX: number, svg: SVGSVGElement) => {
     const px = clientX - svg.getBoundingClientRect().left;
@@ -191,7 +196,8 @@ export function LineChart({
           aria-label={`${title}: ${lines.map((l) => l.label).join(", ")} over ${fmtTime(t1 - t0)}`}
           tabIndex={0}
           onPointerMove={onMove}
-          onPointerLeave={() => setHover(null)}
+          onPointerDown={onMove}
+          onPointerLeave={(e) => e.pointerType !== "touch" && setHover(null)}
           onKeyDown={onKey}
           onBlur={() => setHover(null)}
         >
@@ -204,7 +210,7 @@ export function LineChart({
                 height={plotH}
                 className={i % 2 ? "band-b" : "band-a"}
               />
-              {xt(p.end) - xt(p.start) > 44 && (
+              {xt(p.end) - xt(p.start) > p.name.length * 6.2 + 8 && (
                 <text x={xt(p.start) + 4} y={M.top - 7} className="phase-label">
                   {p.name}
                 </text>
@@ -256,7 +262,7 @@ export function LineChart({
           <div
             className="tooltip"
             aria-live="polite"
-            style={{ left: Math.min(hx + 12, width - 200), top: M.top }}
+            style={{ left: Math.max(0, Math.min(hx + 12, width - 180)), top: M.top }}
           >
             <div className="tt-time">
               {fmtTime(t[hover]! - t0)}

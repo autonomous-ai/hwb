@@ -9,6 +9,7 @@ import healthy from "./fixtures/healthy.json";
 import install from "./fixtures/install.json";
 import { humanSeconds, siBytes, verdict } from "./format";
 import { entityColor } from "./components/Bench";
+import { LineChart } from "./components/Chart";
 import type { Report, Row } from "./types";
 
 // Fixtures are real report.json files from tests/test_flow.py's simulated rigs, run in the
@@ -464,5 +465,39 @@ describe("model weights on disk", () => {
     const card = Array.from(activePanel().querySelectorAll("section.card")).find((c) => c.querySelector("h3")?.textContent?.startsWith("Model weights on disk"))!;
     expect(card.textContent).toContain("Qwen/Qwen3.8-27B");
     expect(card.textContent).toContain("Qwen3_5ForConditionalGeneration");
+  });
+});
+
+// jsdom has no PointerEvent; without it pointerType never reaches the handler.
+if (typeof window.PointerEvent === "undefined") {
+  class PointerEventShim extends MouseEvent {
+    pointerType: string;
+    constructor(type: string, init: PointerEventInit = {}) {
+      super(type, init);
+      this.pointerType = init.pointerType ?? "mouse";
+    }
+  }
+  (window as unknown as { PointerEvent: typeof PointerEventShim }).PointerEvent = PointerEventShim;
+}
+
+describe("charts on phones", () => {
+  const props = { title: "Clock", unit: "MHz", t: [100, 110, 120, 130, 140], lines: [{ key: "a", label: "CPU", color: "#000", values: [1, 2, 3, 4, 5] }], phases: [] };
+
+  it("labels the time axis as elapsed time from 0:00", () => {
+    const { container } = render(<LineChart {...props} />);
+    const ticks = Array.from(container.querySelectorAll("text.tick")).map((e) => e.textContent);
+    expect(ticks).toContain("0:00");
+    expect(ticks).not.toContain("1:40"); // absolute seconds (t0 = 100) must not leak into the labels
+  });
+
+  it("keeps a tapped value shown when the finger lifts", () => {
+    const { container } = render(<LineChart {...props} />);
+    const svg = container.querySelector("svg")!;
+    fireEvent.pointerDown(svg, { clientX: 100, pointerType: "touch" });
+    expect(container.querySelector(".tooltip")).toBeTruthy();
+    fireEvent.pointerLeave(svg, { pointerType: "touch" });
+    expect(container.querySelector(".tooltip")).toBeTruthy();
+    fireEvent.pointerLeave(svg, { pointerType: "mouse" });
+    expect(container.querySelector(".tooltip")).toBeNull();
   });
 });

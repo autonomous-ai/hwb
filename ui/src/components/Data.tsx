@@ -1,7 +1,7 @@
 // Generic rendering of arbitrary report data. Used for check details and any section the
 // UI has no dedicated view for, so new hwb sections show up without a UI change.
 
-import type { ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { label, withUnit } from "../format";
 import type { Row } from "../types";
 
@@ -74,7 +74,7 @@ export function Table({ rows, columns, depth = 0 }: { rows: Row[]; columns?: Col
   const cols: Columns =
     columns ?? [...new Set(rows.flatMap((r) => Object.keys(r)))].map((k) => [k, label(k)] as const);
   return (
-    <div className="table-wrap">
+    <TableWrap>
       <table>
         <thead>
           <tr>
@@ -95,6 +95,36 @@ export function Table({ rows, columns, depth = 0 }: { rows: Row[]; columns?: Col
           ))}
         </tbody>
       </table>
+    </TableWrap>
+  );
+}
+
+/** A horizontally scrolling table with a fade on each side that still has columns to show,
+ * so on a phone it is clear the table goes on. */
+export function TableWrap({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [more, setMore] = useState({ left: false, right: false });
+  const measure = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    const left = el.scrollLeft > 1;
+    const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+    setMore((m) => (m.left === left && m.right === right ? m : { left, right }));
+  }, []);
+  useEffect(() => {
+    const el = ref.current;
+    measure();
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    if (el.firstElementChild) ro.observe(el.firstElementChild);
+    return () => ro.disconnect();
+  }, [measure]);
+  return (
+    <div className={`table-scroll${more.left ? " more-left" : ""}${more.right ? " more-right" : ""}`}>
+      <div className="table-wrap" ref={ref} onScroll={measure}>
+        {children}
+      </div>
     </div>
   );
 }

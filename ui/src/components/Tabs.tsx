@@ -1,4 +1,4 @@
-import { useRef, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
 
 export interface TabItem {
   id: string;
@@ -22,6 +22,17 @@ export function Tabs({
   className?: string;
 }) {
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
+  // In a scrolling strip (many runs on a phone), keep the selected tab in view.
+  const at = items.findIndex((t) => t.id === active);
+  useEffect(() => {
+    // Scroll only the strip itself: scrollIntoView could also scroll the page.
+    const el = refs.current[at];
+    const strip = el?.parentElement;
+    if (!el || !strip || strip.scrollWidth <= strip.clientWidth) return;
+    const left = el.offsetLeft - strip.offsetLeft;
+    if (left < strip.scrollLeft) strip.scrollLeft = left - 8;
+    else if (left + el.offsetWidth > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = left + el.offsetWidth - strip.clientWidth + 8;
+  }, [at]);
   const onKey = (e: KeyboardEvent, i: number) => {
     const last = items.length - 1;
     const next =

@@ -252,6 +252,9 @@ def test_submit_uploads_sanitized_runs_and_prints_link(
     assert f"/r/{REPORT_ID}" in printed
     assert "█" in printed  # the QR code
     assert "Removed before upload:" in printed and "GPU UUIDs" in printed
+    # the link is the last line, right below the QR code: nobody has to scroll back for it
+    *_, qr_bottom, last = printed.rstrip("\n").split("\n")
+    assert "█" in qr_bottom and last == f"Report: {gateway}/r/{REPORT_ID}"
 
     saved = out / client.SUBMISSIONS
     assert stat.S_IMODE(saved.stat().st_mode) == 0o600

@@ -107,24 +107,26 @@ def submit_runs(
     style = client.qr_style(
         os.environ, sys.stdout.encoding, color=color, size=len(sub.qr), lines=lines
     )
-    print(f"\nReport: {sub.url}\n")
-    if style != "off":
-        quiet = client.fit_quiet(len(sub.qr), style, lines)
-        print(client.render_qr(sub.qr, color=color, style=style, quiet=quiet))
-        print()
-        need = client.qr_lines(len(sub.qr), style, quiet)
-        if sys.stdout.isatty() and need > lines:
-            print(
-                f"The QR code needs {need} lines, this screen has {lines}: its top scrolled away. "
-                "Use a smaller console font (sudo dpkg-reconfigure console-setup, or setfont), "
-                "or open the image link below."
-            )
-    print(
-        f"QR code as an image: {sub.url}/qr.svg  (if the one above does not scan: {client.ENV_QR}=full)"
-    )
+    # Everything else goes above the QR code and the link right below it, so the code and the
+    # link are what the screen shows at the end, with no scrolling back.
+    print()
     if sub.retention_days:
         print(f"Kept for {sub.retention_days} days.")
     print(f"Delete it with: hwb --out {out} submit --delete {sub.id}  (token saved in {saved})")
+    print(
+        f"QR code as an image: {sub.url}/qr.svg  (if the one below does not scan: {client.ENV_QR}=full)"
+    )
+    if style != "off":
+        quiet = client.fit_quiet(len(sub.qr), style, lines)
+        need = client.qr_lines(len(sub.qr), style, quiet)
+        if sys.stdout.isatty() and need + 1 > lines:
+            print(
+                f"The QR code needs {need + 1} lines, this screen has {lines}: its top will scroll "
+                "away. Use a smaller console font (sudo dpkg-reconfigure console-setup, or "
+                "setfont), or open the image link above."
+            )
+        print(client.render_qr(sub.qr, color=color, style=style, quiet=quiet))
+    print(f"Report: {sub.url}")
     return 0
 
 

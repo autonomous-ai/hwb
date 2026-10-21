@@ -13,6 +13,7 @@ from hwb.detect.gpu import (
     parse_driver_version,
     scan_pci,
 )
+from hwb.metrics.pcie import LinkLimit
 
 OPEN_570 = "NVRM version: NVIDIA UNIX Open Kernel Module for x86_64  570.86.15  Release Build  (dvs-builder@U16-I3-B03-4-3)  Wed Jan 22 2025\nGCC version:  gcc version 13.3.0"
 PROP_550 = "NVRM version: NVIDIA UNIX x86_64 Kernel Module  550.54.14  Thu Feb 22 01:44:30 UTC 2024"
@@ -88,6 +89,34 @@ def test_pcie_width_degraded_warns() -> None:
     r = check_pcie_link(f)
     assert r.status is Status.WARN
     assert "GPU1 x4/x16" in r.summary
+
+
+def _limit(addr: str, gpu: int, port: int, target: int | None) -> LinkLimit:
+    return LinkLimit(addr, gpu, port, target)
+
+
+def test_pcie_generation_capped_in_bios_warns() -> None:
+    rows = [
+        _row(**{"pci.bus_id": "00000000:16:00.0", "pcie.link.gen.max": "5"}),
+        _row(index="1", **{"pci.bus_id": "00000000:70:00.0", "pcie.link.gen.max": "4"}),
+    ]
+    links = [_limit("0000:16:00.0", 5, 5, 5), _limit("0000:70:00.0", 5, 5, 4)]
+    r = check_pcie_link(GpuFacts(smi_rows=rows, pcie_links=links))
+    assert r.status is Status.WARN
+    assert r.summary == "PCIe generation limited: GPU1 Gen4 of Gen5: set in the BIOS"
+    assert "Auto" in (r.hint or "")
+    # not root: the slot's setting is unreadable, nvidia-smi still shows the cap
+    links = [_limit("0000:16:00.0", 5, 5, None), _limit("0000:70:00.0", 5, 5, None)]
+    r = check_pcie_link(GpuFacts(smi_rows=rows, pcie_links=links))
+    assert r.status is Status.WARN and "GPU1 Gen4 of Gen5" in r.summary
+    assert "root" in (r.hint or "")
+
+
+def test_gen5_card_in_gen4_slot_passes_with_a_note() -> None:
+    rows = [_row(**{"pci.bus_id": "00000000:16:00.0", "pcie.link.gen.max": "4"})]
+    r = check_pcie_link(GpuFacts(smi_rows=rows, pcie_links=[_limit("0000:16:00.0", 5, 4, 4)]))
+    assert r.status is Status.PASS
+    assert "the slot is Gen4" in r.summary
 
 
 # The layout of a host that passes three of its eight GPUs through to QEMU VMs.

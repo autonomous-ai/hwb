@@ -22,6 +22,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .. import nvsmi
+from ..bench import analysis
 from ..core import proc
 from ..core.context import RunContext
 from ..core.errors import HwbError
@@ -203,6 +204,20 @@ def _test(
             hint="see vllm.log in the run directory" if errors else None,
         )
     )  # fmt: skip
+    if sample and s.result.meta.get("pcie"):
+        # serving is often the heaviest PCIe traffic a rig sees (tensor-parallel all-reduce)
+        found = analysis.pcie_findings(s.result)
+        section["findings"] = [vars(f) for f in found]
+        level = analysis.verdict(found)
+        ctx.add(
+            CheckResult(
+                "serve.pcie",
+                Status.FAIL if level == "fail" else Status.WARN if found else Status.PASS,
+                "; ".join(f.text for f in found) if found
+                else "PCIe links at full speed with no errors while serving",
+                hint=found[0].hint if found else None,
+            )
+        )  # fmt: skip
 
 
 def _run_endpoint(

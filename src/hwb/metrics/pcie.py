@@ -12,10 +12,15 @@ shows once the chassis is warm. Two sources, both cheap to poll:
 
 Idle GPUs lower their link generation to save power; that is normal and judged elsewhere
 (only while the GPU is busy).
+
+What caps a link below the card's generation is read from the upstream port: its Link
+Capabilities (``max_link_speed``: the slot itself is older) and, as root, its Target Link Speed
+(Link Control 2 in config space: the BIOS limited the slot, often for a riser).
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
 from dataclasses import dataclass, field
@@ -40,6 +45,9 @@ _GPU_BLOCK = re.compile(r"^GPU ([0-9A-Fa-f]{4,8}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}\.
 _REPLAYS = re.compile(r"Replays Since Reset\s*:\s*(\d+)")
 _ROLLOVERS = re.compile(r"Replay Number Rollovers\s*:\s*(\d+)")
 _REPLAY_ROLLOVER = 1 << 8  # the replay counter wraps at 256 (NVML)
+_CAP_LIST = 0x10  # Status register bit: the device has a capabilities list
+_CAP_PCIE = 0x10  # capability id of the PCI Express capability
+_LNKCTL2 = 0x30  # Link Control 2, inside the PCI Express capability
 
 
 def _read(path: Path) -> str | None:
@@ -99,6 +107,57 @@ def parse_replays(text: str) -> dict[str, int]:
     return out
 
 
+def target_gen(config: bytes) -> int | None:
+    """Target Link Speed (Link Control 2) from a port's config space: the highest generation
+    the link may train to. Unprivileged reads of ``config`` stop at 64 bytes, so this needs root."""
+    if len(config) <= 0x40 or not config[0x06] & _CAP_LIST:
+        return None
+    ptr, seen = config[0x34] & 0xFC, set()
+    while ptr >= 0x40 and ptr not in seen and ptr + _LNKCTL2 + 2 <= len(config):
+        seen.add(ptr)
+        if config[ptr] == _CAP_PCIE:
+            speed = int.from_bytes(config[ptr + _LNKCTL2 : ptr + _LNKCTL2 + 2], "little") & 0xF
+            return speed or None  # the encoding is the generation: 1 = 2.5 GT/s ... 5 = 32 GT/s
+        ptr = config[ptr + 1] & 0xFC
+    return None
+
+
+@dataclass(frozen=True)
+class LinkLimit:
+    """How fast a GPU's link may run: the card, its slot's port, and the port's setting."""
+
+    addr: str
+    gpu_gen: int | None  # the card's own maximum
+    port_gen: int | None  # the upstream port's maximum (the slot)
+    target_gen: int | None  # what the port is set to train to (root only)
+
+    @property
+    def slot_gen(self) -> int | None:
+        """The highest generation the slot hardware allows the card (min of both ends)."""
+        gens = [g for g in (self.gpu_gen, self.port_gen) if g]
+        return min(gens) if gens else None
+
+    @property
+    def bios_capped(self) -> bool:
+        """Slot and card both do more than the port is set to: a BIOS (or OS) setting."""
+        return bool(self.slot_gen and self.target_gen and self.target_gen < self.slot_gen)
+
+
+def link_limit(root: Path, addr: str) -> LinkLimit:
+    dev = root / "sys/bus/pci/devices"
+    port = upstream_port(root, addr)
+    config = b""
+    if port:
+        with contextlib.suppress(OSError):
+            config = (dev / port / "config").read_bytes()
+    return LinkLimit(
+        addr,
+        link_gen(_read(dev / addr / "max_link_speed")),
+        link_gen(_read(dev / port / "max_link_speed")) if port else None,
+        target_gen(config),
+    )
+
+
 def gpu_addresses() -> dict[str, str]:
     """nvidia-smi GPU index -> sysfs PCI address, for the GPUs the host driver owns."""
     rows = nvsmi.query_gpus(("index", "pci.bus_id"))
@@ -133,6 +192,7 @@ class _Gpu:
     upstream: str | None
     max_gen: int | None
     max_width: int | None
+    limit: LinkLimit
     base: dict[str, int | None] = field(default_factory=dict)  # error counters at start
     worst_width: int | None = None
 
@@ -143,16 +203,19 @@ class PcieWatch:
     def __init__(self, root: Path, gpus: dict[str, str]) -> None:
         self.root = root
         dev = root / "sys/bus/pci/devices"
-        self.gpus = [
-            _Gpu(
-                index,
-                addr,
-                upstream_port(root, addr),
-                link_gen(_read(dev / addr / "max_link_speed")),
-                link_width(_read(dev / addr / "max_link_width")),
+        self.gpus = []
+        for index, addr in sorted(gpus.items()):
+            limit = link_limit(root, addr)
+            self.gpus.append(
+                _Gpu(
+                    index,
+                    addr,
+                    upstream_port(root, addr),
+                    limit.gpu_gen,
+                    link_width(_read(dev / addr / "max_link_width")),
+                    limit,
+                )
             )
-            for index, addr in sorted(gpus.items())
-        ]
         self._replays0: dict[str, int] = {}
 
     def _counters(self, g: _Gpu) -> dict[str, int | None]:
@@ -197,6 +260,8 @@ class PcieWatch:
                 "addr": g.addr,
                 "upstream": g.upstream,
                 "max_gen": g.max_gen,
+                "port_max_gen": g.limit.port_gen,
+                "port_target_gen": g.limit.target_gen,
                 "max_width": g.max_width,
                 "min_width": g.worst_width,
                 "correctable_errors": counter_delta(g.base, now, ("aer_dev_correctable",)),

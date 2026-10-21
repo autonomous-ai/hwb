@@ -65,7 +65,7 @@ gateway/               Cloudflare Worker (JS): R2 report store, D1 analysis tabl
 - Blackwell (RTX 50xx, RTX PRO 6000 Blackwell; compute_cap ≥ 10) needs the **open** kernel modules and driver ≥ 570 (R580+ recommended). It also needs CUDA ≥ 12.8 and PyTorch/vLLM wheels built for cu128 or newer. Ampere (A6000) works with either module flavor.
 - The CUDA toolkit (`nvcc`) is optional. torch and vllm pip wheels bundle the CUDA runtime and only need the driver (`libcuda.so.1`).
 - Ubuntu uses its own signed `nvidia-driver-<branch>-server-open` packages, which work with Secure Boot. Debian uses NVIDIA's CUDA repo (`cuda-keyring` + `nvidia-open`). Arch and Omarchy use `nvidia-open-dkms` + `nvidia-utils`, and the headers package must match the kernel flavor (`linux-lts-headers`, etc.).
-- Signals of a bad rig: nouveau loaded, a GPU on PCI but missing from nvidia-smi (Xid 79, "fallen off the bus"), PCIe width below max (bad riser or bifurcation), Xid events, thermal or power throttling under load. PCIe *gen* drops at idle, which is normal. Only width degradation is a WARN.
+- Signals of a bad rig: nouveau loaded, a GPU on PCI but missing from nvidia-smi (Xid 79, "fallen off the bus"), PCIe width below max (bad riser or bifurcation), a link generation capped below what card and slot support (BIOS slot setting: root port Target Link Speed), Xid events, thermal or power throttling under load. The *current* PCIe gen drops at idle, which is normal: judge it only while the GPU is busy.
 - A6000 supports ECC and has a blower cooler. RTX 5090 draws up to 575 W, so check power limits and throttle reasons under the thermal burn.
 - **"A6000" is ambiguous.** RTX A6000 = Ampere, 48 GB, PCIe Gen4, 300 W. RTX PRO 6000 Blackwell = sm_120, 96 GB, PCIe **Gen5**, 600 W Workstation Edition (flow-through cooler: stacked cards breathe each other's exhaust), 300 W Max-Q (blower), passive Server Edition. Customers say "2x A6000" for either; trust `nvidia-smi` name and compute_cap. Expected link, VRAM budget and model choice all differ (e.g. DeepSeek-V4-Flash FP8, 168 GB, runs on 2x PRO 6000 with vLLM's b12x SM120 kernels, not on 2x RTX A6000).
 
@@ -83,7 +83,7 @@ Output goes to `hwb-runs/<UTC-timestamp>-<host>-<command>/{report.json,report.md
 ## Roadmap / status
 
 - [x] core: logging, audit, result model, report, CLI, launcher, bundle
-- [x] `info` (default) driver checks: PCI scan, nouveau, kernel module, binding, Secure Boot, headers, nvidia-smi, Blackwell, PCIe width, persistence, libcuda, nvcc, Xid
+- [x] `info` (default) driver checks: PCI scan, nouveau, kernel module, binding, Secure Boot, headers, nvidia-smi, Blackwell, PCIe width + generation cap, persistence, libcuda, nvcc, Xid
 - [x] `info` inventory: system, board, CPU, memory/DIMMs, NUMA, disks, NICs, hwmon temps, GPUs
 - [x] `install driver|cuda|tools`: dry-run plans + guarded apply
 - [x] `metrics/sampler.py`: background time series (procfs/hwmon/RAPL + nvidia-smi `-lms`) to CSV and the report

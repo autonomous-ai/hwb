@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +39,18 @@ ENV_API_KEY = "HWB_LLM_API_KEY"
 READY_POLL_S = 5.0
 WEIGHTS_SHARE = 0.85  # auto launch: weights may use this share of the GPUs' memory
 LOG_TAIL = 3000
+# A worker's own exception or a compiler error, not the "see root cause above" wrappers.
+_CAUSE = re.compile(r"\b(?:\w+(?:Error|Exception)|fatal error): .+")
+_WRAPPERS = ("WorkerProc initialization failed", "Engine core initialization failed")
+_CAUSE_HINTS = (
+    ("Python.h", "Triton compiles a helper at first start and needs the Python headers of the "
+                 "venv's Python: sudo apt install python3.X-dev (X = that Python), or recreate the "
+                 "venv with --install-vllm, which uses uv's own Python with headers included"),
+    ("FlashInfer", "FlashInfer has no prebuilt kernels in the venv and no nvcc to build them: "
+                   "run vllm download-kernels from the vLLM venv"),
+    ("home_path", "DeepGEMM's JIT found no CUDA toolkit: set CUDA_HOME to one (the vLLM venv "
+                  "has one from pip under site-packages/nvidia/cu*), or install nvcc"),
+)  # fmt: skip
 _LOCAL = {"localhost", "127.0.0.1", "::1"}
 
 
@@ -90,6 +103,60 @@ def find_vllm(explicit: str | None) -> str | None:
     return proc.which("vllm")
 
 
+def venv_env(vllm: str, environ: dict[str, str] | None = None) -> dict[str, str]:
+    """What activating vLLM's venv would give it: its bin on PATH (JIT builds call ninja from
+    there), and CUDA_HOME at the venv's pip toolkit (nvidia/cu*/bin/nvcc) when the rig has no
+    CUDA toolkit, since DeepGEMM and FlashInfer don't look for that one on their own."""
+    environ = dict(os.environ) if environ is None else environ
+    venv = Path(vllm).resolve().parent.parent
+    env: dict[str, str] = {}
+    if (venv / "pyvenv.cfg").exists():
+        env["PATH"] = os.pathsep.join(p for p in (str(venv / "bin"), environ.get("PATH")) if p)
+    if environ.get("CUDA_HOME") or environ.get("CUDA_PATH") or proc.which("nvcc"):
+        return env
+    if Path("/usr/local/cuda/bin/nvcc").exists():
+        return env
+    found = sorted(venv.glob("lib/python3*/site-packages/nvidia/cu*/bin/nvcc"))
+    if found:
+        env["CUDA_HOME"] = str(found[-1].parent.parent)
+        complete_pip_toolkit(found[-1].parent.parent)
+    return env
+
+
+def complete_pip_toolkit(home: Path) -> None:
+    """Give the pip toolkit the layout a JIT link step expects of a CUDA home: lib64/ and the
+    unversioned libX.so names (pip ships lib/ and libX.so.N only, so `-lcudart` fails)."""
+    lib = home / "lib"
+    if not lib.is_dir():
+        return
+    try:
+        if not (home / "lib64").exists():
+            (home / "lib64").symlink_to("lib")
+        for so in lib.glob("lib*.so.*"):
+            plain = lib / (so.name.split(".so.")[0] + ".so")
+            if not plain.exists() and not plain.is_symlink():
+                plain.symlink_to(so.name)
+    except OSError as e:
+        log.warning("could not complete the CUDA toolkit layout in %s: %s", home, e)
+
+
+# The pip CUDA toolkit pieces a JIT compile uses; vLLM's dependencies pull the newest nvcc while
+# torch pins its runtime headers, and CCCL refuses to compile when the two differ.
+_PIP_NVCC = ("nvidia-cuda-nvcc", "nvidia-cuda-crt", "nvidia-nvvm", "nvidia-cuda-cccl")
+
+
+def _match_pip_nvcc(venv: Path) -> None:
+    py = str(venv / "bin" / "python")
+    res = proc.run([py, "-c", "import torch; print(torch.version.cuda or '')"], timeout=300)
+    cuda = res.stdout.strip() if res.ok else ""
+    if not cuda or not list(venv.glob("lib/python3*/site-packages/nvidia/cu*/bin/nvcc")):
+        return
+    pins = [f"{name}=={cuda}.*" for name in _PIP_NVCC]
+    res = proc.run(["uv", "pip", "install", "--python", py, *pins], timeout=1800)
+    if not res.ok:
+        log.warning("could not pin the venv's nvcc to CUDA %s: %s", cuda, res.stderr[-500:])
+
+
 def install_vllm(preset: presets.Preset) -> str:
     """vLLM into an isolated uv venv under $HWB_HOME (never the system or core Python)."""
     if not proc.have("uv"):
@@ -100,21 +167,48 @@ def install_vllm(preset: presets.Preset) -> str:
         name, _, version = spec.partition("==")
         spec = f"{name}[{','.join(preset.vllm_extras)}]=={version}"
     log.info("installing %s into %s (several GB; one time)", spec, venv)
+    # uv's own Python ships its headers; a distro Python needs python3.X-dev, which Triton's
+    # first-start compile of a C helper fails without.
     for argv in (
-        ["uv", "venv", str(venv), "--python", "3.12", "--allow-existing"],
+        ["uv", "venv", str(venv), "--python", "3.12", "--managed-python", "--allow-existing"],
         ["uv", "pip", "install", "--python", str(venv / "bin" / "python"), spec],
     ):
         res = proc.run(argv, timeout=3600)
         if not res.ok:
             raise HwbError(f"{' '.join(argv[:3])} failed: {(res.stderr or res.stdout)[-500:]}")
-    return str(venv / "bin" / "vllm")
+    vllm = str(venv / "bin" / "vllm")
+    _match_pip_nvcc(venv)
+    # Prebuilt FlashInfer kernels: a fresh OS has no nvcc to build them at startup.
+    res = proc.run([vllm, "download-kernels"], timeout=3600)
+    if not res.ok:
+        log.warning("vllm download-kernels failed: %s", (res.stderr or res.stdout)[-500:])
+    return vllm
+
+
+def failure_causes(text: str, limit: int = 5) -> list[str]:
+    """The distinct root-cause lines in a vLLM log; its tail is mostly the wrapping tracebacks."""
+    causes: list[str] = []
+    for line in text.splitlines():
+        m = _CAUSE.search(line)
+        if m and not any(w in line for w in _WRAPPERS):
+            cause = m.group(0).strip()[:400]
+            if cause not in causes:
+                causes.append(cause)
+    return causes[:limit]
 
 
 def _tail(path: Path) -> str:
     try:
-        return path.read_text(encoding="utf-8", errors="replace")[-LOG_TAIL:]
+        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
+    out = text[-LOG_TAIL:]
+    causes = failure_causes(text)
+    if causes:
+        out += "\nRoot cause:\n" + "\n".join(f"  {c}" for c in causes)
+        hints = [h for key, h in _CAUSE_HINTS if any(key in c for c in causes)]
+        out += "".join(f"\nHint: {h}" for h in hints)
+    return out + f"\nFull log: {path}"
 
 
 def wait_ready(base: str, child: proc.Child, log_path: Path, timeout_s: float) -> float:
@@ -333,9 +427,14 @@ def run(ctx: RunContext, opts: ServeOptions) -> None:
     vllm = find_vllm(opts.vllm)
     if vllm is None and opts.install_vllm and not opts.dry_run:
         vllm = install_vllm(preset)
+    if vllm:
+        env |= venv_env(vllm)
+    # vLLM trusts the driver's P2P report unless told to test it; with the IOMMU translating
+    # (Ubuntu's default on Intel), P2P reads return garbage and TP all-reduce hangs in warmup.
+    env.setdefault("VLLM_SKIP_P2P_CHECK", os.environ.get("VLLM_SKIP_P2P_CHECK", "0"))
     argv = preset.command(host="127.0.0.1", port=opts.port, vllm=vllm or "vllm", model=model_arg)
     section["command"] = argv
-    shown = " ".join(f"{k}={v}" for k, v in env.items())
+    shown = " ".join(f"{k}={v}" for k, v in env.items() if k != "PATH")  # PATH: the venv's bin
     print(f"weights: {plan['note']}")
     print("vllm command:\n  " + (shown + " " if shown else "") + " ".join(argv))
     if opts.dry_run:

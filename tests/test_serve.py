@@ -147,9 +147,9 @@ def test_presets_are_consistent() -> None:
         assert cmd[cmd.index("--port") + 1] == "9000"
 
 
-def test_verified_deepseek_preset_is_the_production_command() -> None:
+def test_deepseek_preset_is_the_production_command() -> None:
     p = presets.by_name("deepseek-v4-flash-vision")
-    assert p is not None and p.status == presets.VERIFIED
+    assert p is not None
     cmd = p.command()
     assert cmd[cmd.index("--revision") + 1] == "6821d6ad3681a4b137b066b76094fa82ebd0a380"
     assert "--attention-backend" in cmd and "B12X" in cmd and p.vllm_extras == ("b12x",)
@@ -366,3 +366,12 @@ def test_venv_env_activates_the_venv_and_finds_its_pip_toolkit(
     ).resolve()
     (home / "bin" / "nvcc").unlink()
     assert serve.venv_env(str(vllm), env) == bin_path
+
+
+def test_instanttensor_is_dropped_where_it_cannot_load() -> None:
+    from hwb import serve
+
+    assert serve.loader_problem(None, {"0": 16.0, "1": 16.0}) is None
+    assert serve.loader_problem(8 << 20, {}) is not None  # Ubuntu's default 8 MiB
+    held = serve.loader_problem(None, {"0": 985.0, "1": 16.0})
+    assert held is not None and "GPU0 985 MiB" in held

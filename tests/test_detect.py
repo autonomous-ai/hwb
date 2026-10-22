@@ -286,3 +286,21 @@ def test_link_running_slow_under_traffic_fell_back() -> None:
     idle = {"0000:70:00.0": {"gen_current": 1, "rx_kb_s": 500, "tx_kb_s": 700}}
     r = check_pcie_link(GpuFacts(smi_rows=rows, pcie_links=links, smi_pci=idle))
     assert r.summary == "correctable PCIe errors since boot: GPU0 34"
+
+
+def test_iommu_translating_gpu_dma_is_flagged(tmp_path: Path) -> None:
+    from hwb.detect.gpu import check_iommu, iommu_types
+
+    addrs = ["0000:16:00.0", "0000:70:00.0"]
+    for a in addrs:
+        (tmp_path / a / "iommu_group").mkdir(parents=True)
+        (tmp_path / a / "iommu_group" / "type").write_text("DMA-FQ\n")
+    pci = [PciGpu(a, "0x2bb1", "0x030000", "nvidia") for a in addrs]
+    f = GpuFacts(pci=pci, iommu=iommu_types(addrs, tmp_path))
+    r = check_iommu(f)
+    assert r.status == Status.WARN and "DMA-FQ" in r.summary and "iommu=pt" in (r.hint or "")
+    assert (
+        check_iommu(GpuFacts(pci=pci, iommu=dict.fromkeys(addrs, "identity"))).status == Status.PASS
+    )
+    assert check_iommu(GpuFacts(pci=pci)).status == Status.PASS  # IOMMU off
+    assert check_iommu(GpuFacts(pci=pci[:1])).status == Status.SKIP

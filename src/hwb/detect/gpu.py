@@ -74,6 +74,8 @@ class GpuFacts:
     smi_pci: dict[str, dict[str, int]] | None = None
     kernel_pcie: dict[str, Any] | None = None
     pcie_cooling: list[dict[str, Any]] = field(default_factory=list)
+    # IOMMU domain type per GPU address (sysfs iommu_group/type); empty with the IOMMU off
+    iommu: dict[str, str] = field(default_factory=dict)
 
     @property
     def passthrough(self) -> list[PciGpu]:
@@ -118,6 +120,10 @@ def scan_pci(root: Path = Path("/sys/bus/pci/devices")) -> list[PciGpu]:
         driver = driver_link.resolve().name if driver_link.exists() else None
         gpus.append(PciGpu(dev.name, _read(dev / "device") or "?", pci_class, driver))
     return gpus
+
+
+def iommu_types(addresses: list[str], root: Path = Path("/sys/bus/pci/devices")) -> dict[str, str]:
+    return {a: t for a in addresses if (t := _read(root / a / "iommu_group" / "type"))}
 
 
 def loaded_modules(path: Path = Path("/proc/modules")) -> set[str]:
@@ -214,6 +220,10 @@ def gather() -> GpuFacts:
         ("kernel_pcie", lambda: setattr(facts, "kernel_pcie", pcie.kernel_events())),
         ("pcie_cooling", lambda: setattr(facts, "pcie_cooling", pcie.cooling_devices(Path("/")))),
         ("smi_pci", lambda: setattr(facts, "smi_pci", smi_pci())),
+        (
+            "iommu",
+            lambda: setattr(facts, "iommu", iommu_types([g.address for g in facts.host_gpus])),
+        ),
         (
             "pcie_links",
             lambda: setattr(
@@ -586,6 +596,24 @@ def check_persistence(f: GpuFacts) -> CheckResult:
     return CheckResult("gpu.persistence", Status.PASS, "persistence mode on")
 
 
+def check_iommu(f: GpuFacts) -> CheckResult:
+    if len(f.host_gpus) < 2:
+        return CheckResult("gpu.iommu", Status.SKIP, "one GPU: no peer-to-peer traffic")
+    translated = sorted(a for a, t in f.iommu.items() if t.startswith("DMA"))
+    if translated:
+        return CheckResult(
+            "gpu.iommu",
+            Status.WARN,
+            f"the IOMMU translates GPU DMA ({f.iommu[translated[0]]} on {', '.join(translated)}): "
+            "peer-to-peer copies between GPUs can return wrong data while the driver reports "
+            "P2P as supported, and multi-GPU all-reduce then hangs",
+            hint="add iommu=pt to GRUB_CMDLINE_LINUX_DEFAULT in /etc/default/grub, run "
+            "update-grub and reboot; until then NCCL_P2P_DISABLE=1 avoids it",
+        )
+    mode = "passthrough" if f.iommu else "off"
+    return CheckResult("gpu.iommu", Status.PASS, f"IOMMU {mode} for the GPUs")
+
+
 @needs_host_driver
 def check_libcuda(f: GpuFacts) -> CheckResult:
     if f.libcuda:
@@ -642,6 +670,7 @@ CHECKS: tuple[Check, ...] = (
     check_pcie_link,
     check_pcie_kernel,
     check_persistence,
+    check_iommu,
     check_libcuda,
     check_cuda_toolkit,
     check_xid,

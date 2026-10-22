@@ -123,11 +123,11 @@ PRESETS: tuple[Preset, ...] = (
         weights_gb=167.8,
         quant="fp8 + packed fp4 experts",
         context=262144,
-        status=VERIFIED,
-        default=True,
         vllm_extras=("b12x",),
         no_thinking={"thinking": False},
-        notes="Ran in production on this profile. b12x = vLLM's SM120/SM121 kernels; DSpark speculative decoding.",
+        notes="Ran in production on this profile with a vLLM build other than VLLM_SPEC: with "
+              f"{VLLM_SPEC} on SM120 warmup fails in DeepGEMM's fp8 o_proj (layout.hpp t.dim() == N). "
+              "b12x = vLLM's SM120/SM121 kernels; DSpark speculative decoding.",
         args=(
             "--trust-remote-code",
             "--tensor-parallel-size",
@@ -240,6 +240,8 @@ PRESETS: tuple[Preset, ...] = (
         quant="nvfp4 (modelopt)",
         context=262144,
         no_thinking={"enable_thinking": False},
+        status=VERIFIED,
+        default=True,
         notes="NVFP4 runs natively on Blackwell; leaves ~90 GB for KV cache.",
         args=(
             *_PRO6000,

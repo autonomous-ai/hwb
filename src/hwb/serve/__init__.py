@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import resource
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,7 +27,7 @@ from .. import nvsmi
 from ..bench import analysis
 from ..core import proc
 from ..core.context import RunContext
-from ..core.errors import HwbError
+from ..core.errors import HwbError, ToolMissingError
 from ..core.platform import is_root
 from ..core.result import CheckResult, Status
 from ..metrics import workloads
@@ -39,6 +40,10 @@ ENV_API_KEY = "HWB_LLM_API_KEY"
 READY_POLL_S = 5.0
 WEIGHTS_SHARE = 0.85  # auto launch: weights may use this share of the GPUs' memory
 LOG_TAIL = 3000
+# --load-format instanttensor reads through io_uring with registered (locked) buffers and stages
+# shards on the GPU: it needs a large locked-memory limit and GPUs nobody else holds memory on.
+INSTANTTENSOR_MEMLOCK = 1 << 30
+INSTANTTENSOR_HELD_MIB = 512
 # A worker's own exception or a compiler error, not the "see root cause above" wrappers.
 _CAUSE = re.compile(r"\b(?:\w+(?:Error|Exception)|fatal error): .+")
 _WRAPPERS = ("WorkerProc initialization failed", "Engine core initialization failed")
@@ -138,6 +143,42 @@ def complete_pip_toolkit(home: Path) -> None:
                 plain.symlink_to(so.name)
     except OSError as e:
         log.warning("could not complete the CUDA toolkit layout in %s: %s", home, e)
+
+
+def loader_problem(memlock: int | None, held_mib: dict[str, float]) -> str | None:
+    """Why --load-format instanttensor would fail here (memlock None = unlimited), or None."""
+    if memlock is not None and memlock < INSTANTTENSOR_MEMLOCK:
+        return (f"the locked-memory limit is {memlock // 1024} KiB, too small for its io_uring "
+                "buffers (ulimit -l unlimited, or memlock in /etc/security/limits.conf)")  # fmt: skip
+    held = {g: m for g, m in held_mib.items() if m > INSTANTTENSOR_HELD_MIB}
+    if held:
+        where = ", ".join(f"GPU{g} {m:.0f} MiB" for g, m in sorted(held.items()))
+        return f"memory is already in use ({where}; a desktop?) and its GPU staging runs out"
+    return None
+
+
+def _memlock() -> int | None:
+    """This process's locked-memory limit, the soft one first raised to the hard one (vLLM
+    inherits it); None when unlimited."""
+    soft, hard = resource.getrlimit(resource.RLIMIT_MEMLOCK)
+    if soft != hard:
+        try:
+            resource.setrlimit(resource.RLIMIT_MEMLOCK, (hard, hard))
+        except (ValueError, OSError):
+            return None if soft == resource.RLIM_INFINITY else soft
+    return None if hard == resource.RLIM_INFINITY else hard
+
+
+def _held_mib(indices: list[str]) -> dict[str, float]:
+    try:
+        rows = nvsmi.query_gpus(("index", "memory.used"))
+    except (ToolMissingError, nvsmi.NvidiaSmiError):
+        return {}
+    return {
+        str(r.get("index")): float(r.get("memory.used") or 0)
+        for r in rows
+        if str(r.get("index")) in indices
+    }
 
 
 # The pip CUDA toolkit pieces a JIT compile uses; vLLM's dependencies pull the newest nvcc while
@@ -434,6 +475,14 @@ def run(ctx: RunContext, opts: ServeOptions) -> None:
     env.setdefault("VLLM_SKIP_P2P_CHECK", os.environ.get("VLLM_SKIP_P2P_CHECK", "0"))
     argv = preset.command(host="127.0.0.1", port=opts.port, vllm=vllm or "vllm", model=model_arg)
     section["command"] = argv
+    if "instanttensor" in argv and not opts.dry_run:
+        used = env.get("CUDA_VISIBLE_DEVICES", ",".join(str(i) for i in range(needed))).split(",")
+        no_fast_load = loader_problem(_memlock(), _held_mib(used))
+        if no_fast_load:
+            at = argv.index("--load-format")
+            del argv[at : at + 2]
+            section["loader"] = f"vLLM's default loader: instanttensor would fail, {no_fast_load}"
+            log.warning("not using --load-format instanttensor: %s", no_fast_load)
     shown = " ".join(f"{k}={v}" for k, v in env.items() if k != "PATH")  # PATH: the venv's bin
     print(f"weights: {plan['note']}")
     print("vllm command:\n  " + (shown + " " if shown else "") + " ".join(argv))

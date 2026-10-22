@@ -190,9 +190,9 @@ The presets for **2× RTX PRO 6000 Blackwell** (2 × 96 GB, sm_120):
 
 | preset | model | weights | status |
 |---|---|---|---|
-| `deepseek-v4-flash-vision` (default) | deepseek-ai/DeepSeek-V4-Flash-Vision-Exp @ `6821d6a` | 168 GB fp8 + fp4 experts | verified |
-| `deepseek-v4-flash` | deepseek-ai/DeepSeek-V4-Flash-0731 | 167 GB | untested |
-| `qwen3.5-122b-a10b-nvfp4` | nvidia/Qwen3.5-122B-A10B-NVFP4 | 84 GB | untested |
+| `deepseek-v4-flash-vision` | deepseek-ai/DeepSeek-V4-Flash-Vision-Exp @ `6821d6a` | 168 GB fp8 + fp4 experts | ran in production on another vLLM build; fails with the pinned vLLM 0.32.0 on SM120 (DeepGEMM o_proj) |
+| `deepseek-v4-flash` | deepseek-ai/DeepSeek-V4-Flash-0731 | 167 GB | fails like the vision preset |
+| `qwen3.5-122b-a10b-nvfp4` (default) | nvidia/Qwen3.5-122B-A10B-NVFP4 | 84 GB | verified (886 tok/s at 16 concurrent) |
 | `qwen3.8-flash-next-nvfp4` | nvidia/Qwen3.8-Flash-Next-NVFP4 | 133 GB | untested |
 | `qwen3.6-35b-a3b-fp8` | Qwen/Qwen3.6-35B-A3B-FP8 (one copy per GPU) | 38 GB | untested |
 | `glm-4.5-air-fp8` | zai-org/GLM-4.5-Air-FP8 | 113 GB | untested |

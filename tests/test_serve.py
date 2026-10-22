@@ -320,3 +320,49 @@ def test_reasoning_that_eats_the_answer_budget_is_explained(
     monkeypatch.setattr(suite, "chat", lambda *a, **k: thinking_only)
     (first, *_) = suite.run_checks("http://x", "m", no_thinking=suite.NO_THINKING_ANY, tools=False)
     assert first["status"] == "fail" and "budget went to reasoning" in first["detail"]
+
+
+def test_failure_causes_skip_the_wrapping_tracebacks() -> None:
+    from hwb import serve
+
+    log = textwrap.dedent(
+        """\
+        /tmp/x/cuda_utils.c:9:10: fatal error: Python.h: No such file or directory
+        (Worker_TP1 pid=1) ERROR [multiproc_executor.py:953] subprocess.CalledProcessError: Command '['/usr/bin/gcc']' returned 1
+        (Worker_TP0 pid=2) ERROR [multiproc_executor.py:953] subprocess.CalledProcessError: Command '['/usr/bin/gcc']' returned 1
+        (EngineCore pid=3) ERROR [core.py:1510] Exception: WorkerProc initialization failed due to an exception in a background process. See stack trace for root cause.
+        RuntimeError: Engine core initialization failed. See root cause above. Failed core proc(s): {}
+        """
+    )
+    assert serve.failure_causes(log) == [
+        "fatal error: Python.h: No such file or directory",
+        "CalledProcessError: Command '['/usr/bin/gcc']' returned 1",
+    ]
+
+
+def test_venv_env_activates_the_venv_and_finds_its_pip_toolkit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from hwb import serve
+    from hwb.core import proc
+
+    monkeypatch.setattr(proc, "which", lambda name: None)
+    vllm = tmp_path / "venv" / "bin" / "vllm"
+    vllm.parent.mkdir(parents=True)
+    vllm.touch()
+    (tmp_path / "venv" / "pyvenv.cfg").touch()
+    bin_path = {"PATH": f"{vllm.parent.resolve()}:/usr/bin"}
+    home = tmp_path / "venv" / "lib" / "python3.12" / "site-packages" / "nvidia" / "cu13"
+    (home / "bin").mkdir(parents=True)
+    (home / "bin" / "nvcc").touch()
+    env = {"PATH": "/usr/bin"}
+    assert serve.venv_env(str(vllm), env) == bin_path | {"CUDA_HOME": str(home.resolve())}
+    assert serve.venv_env(str(vllm), env | {"CUDA_HOME": "/opt/cuda"}) == bin_path
+    (home / "lib").mkdir()
+    (home / "lib" / "libcudart.so.13").touch()
+    serve.complete_pip_toolkit(home)
+    assert (home / "lib64" / "libcudart.so").resolve() == (
+        home / "lib" / "libcudart.so.13"
+    ).resolve()
+    (home / "bin" / "nvcc").unlink()
+    assert serve.venv_env(str(vllm), env) == bin_path

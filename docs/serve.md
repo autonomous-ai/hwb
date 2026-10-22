@@ -73,6 +73,12 @@ hwb then:
 4. runs the checks and the load test;
 5. **always stops vLLM**, including on Ctrl-C or SIGTERM.
 
+### When the launch fails or hangs
+
+- **Hangs in warmup with both GPUs at 100% and low power:** GPU peer-to-peer copies are broken, usually because the IOMMU translates DMA (Ubuntu's default on Intel: `dmesg | grep "Default domain type: Translated"`). The driver still reports P2P as supported, so the all-reduce waits forever. Fix: add `iommu=pt` to `GRUB_CMDLINE_LINUX_DEFAULT`, run `update-grub`, then reboot. Until then, use `NCCL_P2P_DISABLE=1`.
+- **`io_uring_register_buffers failed: Cannot allocate memory`** (presets with `--load-format instanttensor`): the locked-memory limit is too low. Raise it with `ulimit -l unlimited` (or `memlock` in `/etc/security/limits.conf`).
+- **`CUDA out of memory` while loading weights on the GPU that drives the desktop:** Xorg and the desktop already hold about 1 GB there. Stop the display manager, or lower `--gpu-memory-utilization`.
+
 ## 3. What it measures
 
 **Answer checks.** They run with reasoning off and temperature 0, so answers are short and deterministic. They catch a server that's up but wrong.

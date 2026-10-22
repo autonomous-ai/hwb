@@ -176,6 +176,6 @@ def test_serve_launches_on_the_free_gpus(
         == 0
     )
     assert (
-        "CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0,1 vllm serve zai-org/GLM-4.7-Flash"
+        "CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0,1 VLLM_SKIP_P2P_CHECK=0 vllm serve zai-org/GLM-4.7-Flash"
         in capsys.readouterr().out
     )

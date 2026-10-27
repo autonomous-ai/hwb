@@ -30,7 +30,7 @@ NEEDLE = "4817"
 # DeepSeek: thinking). Templates ignore keys they don't use.
 NO_THINKING_ANY: dict[str, Any] = {"enable_thinking": False, "thinking": False}
 _FILLER = (
-    "The archive room held ledgers from the harbour office: shipping manifests, tide tables, "
+    "The archive room held ledgers from the harbor office: shipping manifests, tide tables, "
     "repair invoices for the north pier and letters about the price of rope. "
 )
 
@@ -52,8 +52,8 @@ def _check_json(r: Reply) -> tuple[bool, str]:
         data = _json_answer(r.text)
     except ValueError:
         return False, "answer is not valid JSON"
-    ok = isinstance(data, dict) and str(data.get("city", "")).lower() == "paris"
-    return ok, "" if ok else f"expected city Paris, got {data!r}"[:200]
+    ok = isinstance(data, dict) and str(data.get("city", "")).lower() == "austin"
+    return ok, "" if ok else f"expected city Austin, got {data!r}"[:200]
 
 
 def _check_tool(r: Reply) -> tuple[bool, str]:
@@ -64,7 +64,7 @@ def _check_tool(r: Reply) -> tuple[bool, str]:
         args = json.loads(call["arguments"] or "{}")
     except ValueError:
         return False, f"tool arguments are not JSON: {call['arguments'][:120]!r}"
-    ok = call["name"] == "get_weather" and "hanoi" in str(args.get("city", "")).lower()
+    ok = call["name"] == "get_weather" and "chicago" in str(args.get("city", "")).lower()
     return ok, "" if ok else f"unexpected tool call {call['name']}({args})"[:200]
 
 
@@ -80,7 +80,7 @@ WEATHER_TOOL = {
     "type": "function",
     "function": {
         "name": "get_weather",
-        "description": "Current weather for a city.",
+        "description": "Current weather for a US city.",
         "parameters": {
             "type": "object",
             "properties": {"city": {"type": "string"}},
@@ -103,7 +103,7 @@ CHECKS: tuple[Check, ...] = (
     Check("arithmetic", "What is 17 * 23? Reply with only the number.", _contains("391"), 32),
     Check(
         "json",
-        'Give the capital of France as a JSON object with the keys "city" and "country". '
+        'Give the capital of Texas as a JSON object with the keys "city" and "state". '
         "Reply with the JSON only.",
         _check_json,
         96,
@@ -122,7 +122,7 @@ CHECKS: tuple[Check, ...] = (
     ),
     Check(
         "tool_call",
-        "What's the weather in Hanoi right now?",
+        "What's the weather in Chicago right now?",
         _check_tool,
         256,
         tools=[WEATHER_TOOL],
@@ -179,7 +179,7 @@ def run_checks(
 TOPICS = (
     "the history of the printing press", "how bridges carry load", "the water cycle",
     "why the sky is blue", "how vaccines train the immune system", "the life of honeybees",
-    "the design of a jet engine", "how compilers optimise loops", "plate tectonics",
+    "the design of a jet engine", "how compilers optimize loops", "plate tectonics",
     "the economics of container shipping", "how a refrigerator moves heat", "coral reefs",
 )  # fmt: skip
 
@@ -228,7 +228,7 @@ def parse_profiles(spec: str | None) -> tuple[Profile, ...]:
 
 
 _VOCAB = (
-    "harbour ledger manifest tide pier rope invoice cargo crane berth vessel captain pilot "
+    "harbor ledger manifest tide pier rope invoice cargo crane berth vessel captain pilot "
     "anchor channel buoy freight customs warehouse dock crew engine hull keel rudder sail mast "
     "deck cabin galley chart compass beacon storm current wave shore reef lighthouse signal "
     "voyage route port schedule tonnage container pallet forklift gantry quay mooring tug barge "
@@ -254,7 +254,7 @@ def filler(seed: int, words: int) -> str:
 def _prompt(i: int, words: int) -> str:
     # The request number leads, so no two prompts share a cacheable prefix.
     return (
-        f"[request {i}] Read these harbour notes, then write a long report on them.\n\n"
+        f"[request {i}] Read these harbor notes, then write a long report on them.\n\n"
         + filler(i, words)
     )
 

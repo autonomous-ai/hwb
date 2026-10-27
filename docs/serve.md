@@ -81,15 +81,15 @@ hwb then:
 
 ## 3. What it measures
 
-**Answer checks.** They run with reasoning off and temperature 0, so answers are short and deterministic. They catch a server that's up but wrong.
+**Answer checks.** They run with reasoning off and temperature 0, so answers are short and deterministic. They catch a server that's up but wrong. Every prompt hwb sends, checks and load tests alike, is in English with US subject matter, so results don't depend on how well a model knows one region.
 
 | check | passes when | a failure usually means |
 |---|---|---|
 | `arithmetic` | `17 × 23` → `391` | broken weights, quantization or chat template |
-| `json` | JSON only, `city` = Paris | the template or the model ignores instructions |
+| `json` | JSON only, `city` = Austin (capital of Texas) | the template or the model ignores instructions |
 | `code` | writes `def is_prime` | the same |
 | `long_context` | finds a code hidden in ~6000 words | context or attention problems (`--max-model-len`, KV cache) |
-| `tool_call` | calls `get_weather(city="Hanoi")` | wrong or missing `--tool-call-parser` / `--enable-auto-tool-choice` |
+| `tool_call` | calls `get_weather(city="Chicago")` | wrong or missing `--tool-call-parser` / `--enable-auto-tool-choice` |
 
 If an answer comes back empty because the model spent its whole token budget reasoning, the failure says so. Pass `--preset` so hwb knows how to switch reasoning off for that model.
 

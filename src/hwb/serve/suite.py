@@ -253,9 +253,8 @@ def filler(seed: int, words: int) -> str:
 
 def _prompt(i: int, words: int) -> str:
     # The request number leads, so no two prompts share a cacheable prefix.
-    return (
-        f"[request {i}] Read these harbor notes, then write a long report on them.\n\n"
-        + filler(i, words)
+    return f"[request {i}] Read these harbor notes, then write a long report on them.\n\n" + filler(
+        i, words
     )
 
 

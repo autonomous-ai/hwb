@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import os
 import pwd
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -101,6 +101,13 @@ def validate(key: str, value: str) -> str:
             raise ConfigError(f"submit must be one of {', '.join(SUBMIT_MODES)}, not {value!r}")
     if not value:
         raise ConfigError(f"empty value for {key}; use `hwb config unset {key}`")
+    if key == "gateway":
+        from .share.client import gateway_base  # share imports nothing from here
+
+        try:
+            value = gateway_base(value)
+        except HwbError as exc:
+            raise ConfigError(str(exc)) from None
     return value
 
 
@@ -127,3 +134,60 @@ def write(key: str, value: str | None, env: Mapping[str, str] | None = None) -> 
     except OSError as exc:
         raise ConfigError(f"cannot write {p}: {exc}") from None
     return p
+
+
+AUTO_WARNING = (
+    "Every finished run will now be uploaded, sanitized, to the gateway without asking; "
+    "anyone with a report's link can view it."
+)
+
+
+def menu(
+    ask: Callable[[str], str] = input,
+    say: Callable[[str], None] = print,
+    env: Mapping[str, str] | None = None,
+) -> None:
+    """`hwb config` in a terminal: pick a setting by number, change it, saved at once.
+    Plain numbered prompts, so it works on any console (IPMI/KVM, ssh with a C locale)."""
+    keys = list(KEYS)
+    while True:
+        current = read_file(env)
+        say(f"\nhwb settings ({path(env)})\n")
+        for i, key in enumerate(keys, 1):
+            shown = current.get(key) or ("ask" if key == "submit" else "-")
+            say(f"  {i}) {key:<8} {shown:<34} {KEYS[key]}")
+        say("  q) quit\n")
+        choice = ask(f"Change which setting [1-{len(keys)}, q]: ").strip().lower()
+        if choice in ("", "q", "quit", "exit"):
+            return
+        if not choice.isdigit() or not 1 <= int(choice) <= len(keys):
+            say(f"  pick 1-{len(keys)} or q")
+            continue
+        key = keys[int(choice) - 1]
+        try:
+            changed, value = _ask_value(key, current.get(key), ask)
+            if not changed:
+                continue
+            write(key, value, env)
+        except ConfigError as exc:
+            say(f"  not saved: {exc}")
+            continue
+        say(f"  saved: {key} = {value}" if value is not None else f"  saved: {key} removed")
+        if key == "submit" and value == "auto":
+            say(f"  {AUTO_WARNING}")
+
+
+def _ask_value(key: str, current: str | None, ask: Callable[[str], str]) -> tuple[bool, str | None]:
+    """(changed, new value); None removes the setting."""
+    if key == "submit":
+        options = "  ".join(f"{i}) {m}" for i, m in enumerate(SUBMIT_MODES, 1))
+        pick = ask(f"submit: {options}  [Enter keeps {current or 'ask'}]: ").strip().lower()
+        if not pick:
+            return False, current
+        if pick.isdigit() and 1 <= int(pick) <= len(SUBMIT_MODES):
+            return True, SUBMIT_MODES[int(pick) - 1]
+        return True, validate(key, pick)
+    value = ask(f"{key} [Enter keeps {current or 'none'}, - clears]: ").strip()
+    if not value:
+        return False, current
+    return True, None if value == "-" else validate(key, value)

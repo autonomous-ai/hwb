@@ -191,8 +191,11 @@ PRESETS: tuple[Preset, ...] = (
         quant="fp8 + packed fp4 experts",
         context=262144,
         vllm_extras=("b12x",),
+        status=VERIFIED,
         no_thinking={"thinking": False},
-        notes="Text-only sibling of the verified vision preset: same weights layout and flags.",
+        notes="Text-only sibling of the vision preset: same weights layout and flags. Verified on "
+              "2x RTX PRO 6000 Blackwell WS with vllm 0.32.0 (2026-10-28): 5/5 answer checks, 671 tok/s "
+              "at 16 concurrent (256-token answers), 1319 tok/s out at 1k in / 8k out, PCIe clean.",
         args=(
             "--trust-remote-code",
             "--tensor-parallel-size",

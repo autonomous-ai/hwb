@@ -416,6 +416,62 @@ describe("model serving", () => {
     expect(rows[1]!.textContent).toContain("2,100");
     expect(within(panel).getByText(/vllm serve deepseek-ai/)).toBeTruthy();
   });
+
+  const profiled = (started: string, model: string, tok: number): Report => {
+    const serve = serveReport.sections.bench as { serve: Row };
+    return {
+      ...serveReport,
+      started_at: started,
+      results: [...serveReport.results, { name: "serve.pcie", status: "pass", summary: "clean", hint: null, data: {} }],
+      sections: {
+        bench: {
+          serve: {
+            ...serve.serve,
+            model,
+            profiles: [
+              {
+                name: "rag",
+                about: "long prompt (RAG, summaries, code review): 8k in, 1k out",
+                levels: [{ concurrency: 4, requests: 16, ok: 16, errors: 0, prompt_tokens_mean: 8190, total_tok_per_s: tok, output_tok_per_s: 310, ttft_ms_p50: 2100 }],
+              },
+              { name: "agent", about: "coding-agent context: 32k in, 1k out", levels: [], skipped: "needs 33792 tokens of context; the server allows 20000" },
+            ],
+          },
+        },
+      },
+    };
+  };
+
+  it("groups the load tests: default sweep, then one table per profile", async () => {
+    const user = userEvent.setup();
+    render(<App bundle={normalize(profiled("2026-10-27T10:00:00Z", "glm", 2810))} />);
+    await user.click(tab("Report sections", "Benchmarks"));
+    const panel = activePanel();
+    const captions = [...panel.querySelectorAll("table.serve-load caption")].map((c) => c.textContent);
+    expect(captions[0]).toMatch(/^Default sweep/);
+    expect(captions[1]).toMatch(/^Profile rag.*8k in, 1k out/);
+    expect(captions[2]).toMatch(/^Profile agent/);
+    expect(panel.querySelectorAll("table.serve-load")[1]!.textContent).toContain("2,810");
+    expect(within(panel).getByText(/Skipped: needs 33792 tokens/)).toBeTruthy();
+  });
+
+  it("lines up every serve run on the overview, grouped by model", async () => {
+    const user = userEvent.setup();
+    const runs = [
+      { id: "r1", report: profiled("2026-10-26T10:00:00Z", "glm", 2700) },
+      { id: "r2", report: profiled("2026-10-27T10:00:00Z", "glm", 2810) },
+      { id: "r3", report: profiled("2026-10-27T12:00:00Z", "qwen", 4100) },
+    ];
+    render(<App bundle={{ runs }} />);
+    await user.click(tab("Report sections", "Benchmarks"));
+    const history = within(activePanel()).getByRole("region", { name: "All benchmark runs" });
+    const tables = history.querySelectorAll("table.history");
+    expect([...tables].map((t) => t.querySelector("caption")!.firstChild!.textContent!.trim())).toEqual(["qwen", "glm"]);
+    const glmRows = tables[1]!.querySelectorAll("tbody tr");
+    expect(glmRows).toHaveLength(6); // 2 runs x (default sweep, rag, agent)
+    expect(glmRows[1]!.textContent).toContain("2,810");
+    expect(glmRows[0]!.querySelector("a")!.getAttribute("href")).toBe("#/r2/bench");
+  });
 });
 
 describe("models on the GPUs", () => {

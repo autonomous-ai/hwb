@@ -2,8 +2,9 @@
 // each benchmark in sections.bench (cpu, thermal, and whatever hwb adds later).
 
 import type { ReactNode } from "react";
+import { runLabel, type Run } from "../bundle";
 import { label as keyLabel } from "../format";
-import type { Row } from "../types";
+import type { Row, Status } from "../types";
 import { LineChart, SLOTS, type Line, type Phase } from "./Chart";
 import { Dash, KV, TableWrap } from "./Data";
 
@@ -138,10 +139,77 @@ function PcieTable({ pcie }: { pcie: unknown }) {
   );
 }
 
+const ms = (v: unknown) => fmt(v, 0, " ms") ?? <Dash />;
+
+/** One load test (the default sweep or a profile): a row per concurrency level. Input and
+ * total throughput only appear when the server reported prompt token counts. */
+function LoadTable({ levels, caption, note, skipped }: { levels: Row[]; caption: string; note: string; skipped?: string }) {
+  const withInput = levels.some((lv) => num(lv.total_tok_per_s) !== null && num(lv.prompt_tokens_mean)! > 200);
+  return (
+    <TableWrap>
+      <table className="serve-load">
+        <caption>
+          {caption} <span className="caption-note">{note}</span>
+        </caption>
+        {skipped ? (
+          <tbody>
+            <tr>
+              <td className="muted">Skipped: {skipped}</td>
+            </tr>
+          </tbody>
+        ) : (
+          <>
+            <thead>
+              <tr>
+                <th className="num">Concurrent</th>
+                <th className="num">OK / errors</th>
+                {withInput && <th className="num">Input tokens</th>}
+                {withInput && <th className="num">Total tok/s</th>}
+                <th className="num">Output tok/s</th>
+                <th className="num">Per request tok/s</th>
+                <th className="num">TTFT p50 / p99</th>
+                <th className="num">TPOT p50</th>
+                <th className="num">Longest stall</th>
+              </tr>
+            </thead>
+            <tbody>
+              {levels.map((lv) => (
+                <tr key={String(lv.concurrency)}>
+                  <td className="num">{String(lv.concurrency)}</td>
+                  <td className={`num${num(lv.errors) ? " bad" : ""}`}>
+                    {String(lv.ok)} / {String(lv.errors)}
+                  </td>
+                  {withInput && <td className="num">{fmt(lv.prompt_tokens_mean, 0) ?? <Dash />}</td>}
+                  {withInput && (
+                    <td className="num">
+                      <strong>{fmt(lv.total_tok_per_s, 0) ?? <Dash />}</strong>
+                    </td>
+                  )}
+                  <td className="num">
+                    {withInput ? fmt(lv.output_tok_per_s, 0) ?? <Dash /> : <strong>{fmt(lv.output_tok_per_s, 0) ?? <Dash />}</strong>}
+                  </td>
+                  <td className="num">{fmt(lv.per_request_tok_per_s, 0) ?? <Dash />}</td>
+                  <td className="num">
+                    {ms(lv.ttft_ms_p50)} / {ms(lv.ttft_ms_p99)}
+                  </td>
+                  <td className="num">{ms(lv.tpot_ms_p50)}</td>
+                  <td className="num">{ms(lv.max_stall_ms)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </>
+        )}
+      </table>
+    </TableWrap>
+  );
+}
+
 function ServeTables({ b }: { b: Row }) {
   const checks = Array.isArray(b.checks) ? (b.checks as Row[]) : [];
   const levels = Array.isArray(b.load) ? (b.load as Row[]) : [];
-  const ms = (v: unknown) => fmt(v, 0, " ms") ?? <Dash />;
+  const profiles = Array.isArray(b.profiles) ? (b.profiles as Row[]) : [];
+  const first = levels[0];
+  const outPer = num(first?.completion_tokens) !== null && num(first?.ok) ? num(first!.completion_tokens)! / num(first!.ok)! : null;
   return (
     <>
       {checks.length > 0 && (
@@ -174,43 +242,23 @@ function ServeTables({ b }: { b: Row }) {
           </table>
         </TableWrap>
       )}
+      {(levels.length > 0 || profiles.length > 0) && <h4 className="bench-sub">Load tests</h4>}
       {levels.length > 0 && (
-        <TableWrap>
-          <table className="serve-load">
-            <caption>Load test ({String(levels[0]?.requests ?? "")}+ requests per level, fixed output length)</caption>
-            <thead>
-              <tr>
-                <th className="num">Concurrent</th>
-                <th className="num">OK / errors</th>
-                <th className="num">Output tok/s</th>
-                <th className="num">Per request tok/s</th>
-                <th className="num">TTFT p50 / p99</th>
-                <th className="num">TPOT p50</th>
-                <th className="num">Longest stall</th>
-              </tr>
-            </thead>
-            <tbody>
-              {levels.map((lv) => (
-                <tr key={String(lv.concurrency)}>
-                  <td className="num">{String(lv.concurrency)}</td>
-                  <td className={`num${num(lv.errors) ? " bad" : ""}`}>
-                    {String(lv.ok)} / {String(lv.errors)}
-                  </td>
-                  <td className="num">
-                    <strong>{fmt(lv.output_tok_per_s, 0) ?? <Dash />}</strong>
-                  </td>
-                  <td className="num">{fmt(lv.per_request_tok_per_s, 0) ?? <Dash />}</td>
-                  <td className="num">
-                    {ms(lv.ttft_ms_p50)} / {ms(lv.ttft_ms_p99)}
-                  </td>
-                  <td className="num">{ms(lv.tpot_ms_p50)}</td>
-                  <td className="num">{ms(lv.max_stall_ms)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </TableWrap>
+        <LoadTable
+          levels={levels}
+          caption="Default sweep"
+          note={`short prompt, ${fmt(outPer, 0) ?? "fixed"} output tokens per request: measures decode`}
+        />
       )}
+      {profiles.map((p) => (
+        <LoadTable
+          key={String(p.name)}
+          levels={Array.isArray(p.levels) ? (p.levels as Row[]) : []}
+          caption={`Profile ${String(p.name)}`}
+          note={String(p.about ?? "")}
+          skipped={p.skipped ? String(p.skipped) : undefined}
+        />
+      ))}
       {Array.isArray(b.command) && (
         <details className="data">
           <summary>vLLM command</summary>
@@ -432,11 +480,151 @@ function BenchCard({ kind, b, runId }: { kind: string; b: Row; runId: string }) 
 }
 
 const rank = (kind: string) => (ORDER.includes(kind) ? ORDER.indexOf(kind) : ORDER.length);
+const best = (levels: Row[], key: string) =>
+  levels.reduce<Row | null>((a, lv) => ((num(lv[key]) ?? -1) > (num(a?.[key]) ?? -1) ? lv : a), null);
+const asRows = (v: unknown) => (Array.isArray(v) ? (v as Row[]) : []);
 
-export function BenchPanel({ bench, runId }: { bench: Row; runId: string }) {
+interface HistoryRow {
+  run: Run;
+  b: Row;
+}
+
+function RunLink({ run }: { run: Run }) {
+  return <a href={"#/" + [run.id, "bench"].map(encodeURIComponent).join("/")}>{runLabel(run)}</a>;
+}
+
+/** Overview: every serve run grouped by model, one row per load test (default sweep, then each
+ * profile), so runs of the same model line up across time, slots and fixes. */
+function ServeHistory({ rows }: { rows: HistoryRow[] }) {
+  const byModel = new Map<string, HistoryRow[]>();
+  for (const r of rows) {
+    const model = String(r.b.model ?? (r.b.preset as Row | undefined)?.model ?? "?");
+    byModel.set(model, [...(byModel.get(model) ?? []), r]);
+  }
+  return (
+    <>
+      {[...byModel.entries()].map(([model, runs]) => (
+        <TableWrap key={model}>
+          <table className="serve-load history">
+            <caption>
+              {model} <span className="caption-note">{runs.length} run{runs.length > 1 ? "s" : ""}</span>
+            </caption>
+            <thead>
+              <tr>
+                <th>Run</th>
+                <th>Test</th>
+                <th className="num">Best tok/s</th>
+                <th className="num">at concurrent</th>
+                <th className="num">TTFT p50</th>
+                <th className="num">Errors</th>
+                <th>PCIe</th>
+              </tr>
+            </thead>
+            <tbody>
+              {runs.flatMap(({ run, b }) => {
+                const pcie = run.report.results?.find((r) => r.name === "serve.pcie")?.status as Status | undefined;
+                const tests: [string, Row[]][] = [
+                  ["default sweep", asRows(b.load)],
+                  ...asRows(b.profiles).map((p): [string, Row[]] => [`${String(p.name)}${p.skipped ? " (skipped)" : ""}`, asRows(p.levels)]),
+                ];
+                return tests.map(([test, levels], i) => {
+                  const total = levels.some((lv) => num(lv.total_tok_per_s) !== null && num(lv.prompt_tokens_mean)! > 200);
+                  const top = best(levels, total ? "total_tok_per_s" : "output_tok_per_s");
+                  const errors = levels.reduce((n, lv) => n + (num(lv.errors) ?? 0), 0);
+                  return (
+                    <tr key={`${run.id}-${test}`} className={i === 0 ? "group-start" : undefined}>
+                      <td>{i === 0 ? <RunLink run={run} /> : null}</td>
+                      <td>{test}</td>
+                      <td className="num">
+                        <strong>{fmt(top?.[total ? "total_tok_per_s" : "output_tok_per_s"], 0) ?? <Dash />}</strong>
+                        {total ? <span className="muted small"> in+out</span> : null}
+                      </td>
+                      <td className="num">{top ? String(top.concurrency) : <Dash />}</td>
+                      <td className="num">{ms(top?.ttft_ms_p50)}</td>
+                      <td className={`num${errors ? " bad" : ""}`}>{levels.length ? errors : <Dash />}</td>
+                      <td>{i === 0 && pcie ? <span className={`pill ${pcie}`}>{pcie}</span> : null}</td>
+                    </tr>
+                  );
+                });
+              })}
+            </tbody>
+          </table>
+        </TableWrap>
+      ))}
+    </>
+  );
+}
+
+/** Overview: the CPU, thermal and monitor runs side by side, one table per kind. */
+function OtherHistory({ kind, rows }: { kind: string; rows: HistoryRow[] }) {
+  const cols: [string, (b: Row) => string | null][] =
+    kind === "cpu"
+      ? [["All-core", (b) => fmt(b.multi_ops_per_s)], ["Single-core", (b) => fmt(b.single_ops_per_s)], ["Scaling", (b) => fmt(b.scaling_pct, 0, "%")], ["Peak CPU temp", (b) => fmt(b.cpu_temp_peak_c, 0, " °C")]]
+      : kind === "thermal"
+        ? [["Peak CPU temp", (b) => fmt(b.cpu_temp_peak_c, 0, " °C")], ["Headroom", (b) => fmt(b.cpu_temp_margin_c, 0, " °C")], ["Clock sag", (b) => fmt(b.cpu_clock_sag_pct, 1, "%")], ["Throttle events", (b) => fmt(b.cpu_throttle_events)]]
+        : [["Recorded", (b) => fmt(b.seconds, 0, " s")], ["CPU busy", (b) => fmt(b.cpu_util_pct, 0, "%")], ["Peak CPU temp", (b) => fmt(b.cpu_temp_peak_c, 0, " °C")]];
+  return (
+    <TableWrap>
+      <table className="serve-load history">
+        <caption>{TITLES[kind] ?? keyLabel(kind)}</caption>
+        <thead>
+          <tr>
+            <th>Run</th>
+            {cols.map(([h]) => (
+              <th key={h} className="num">
+                {h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(({ run, b }) => (
+            <tr key={run.id}>
+              <td>
+                <RunLink run={run} />
+              </td>
+              {cols.map(([h, get]) => (
+                <td key={h} className="num">
+                  {get(b) ?? <Dash />}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </TableWrap>
+  );
+}
+
+function BenchHistory({ runs }: { runs: Run[] }) {
+  const byKind = new Map<string, HistoryRow[]>();
+  for (const run of runs) {
+    const bench = (run.report.sections?.bench ?? {}) as Row;
+    for (const [kind, b] of Object.entries(bench)) {
+      if (b && typeof b === "object" && ["serve", "cpu", "thermal", "monitor"].includes(kind))
+        byKind.set(kind, [...(byKind.get(kind) ?? []), { run, b: b as Row }]);
+    }
+  }
+  const kinds = [...byKind.keys()].sort((a, b) => rank(a) - rank(b));
+  if (!kinds.some((k) => byKind.get(k)!.length > 1)) return null;
+  return (
+    <section className="bench" aria-label="All benchmark runs">
+      <header className="bench-head">
+        <h3>All benchmark runs</h3>
+      </header>
+      <p className="muted small">Every run in this report, newest first and grouped by benchmark. The cards below show the latest run of each.</p>
+      {kinds.map((k) =>
+        k === "serve" ? <ServeHistory key={k} rows={byKind.get(k)!} /> : <OtherHistory key={k} kind={k} rows={byKind.get(k)!} />,
+      )}
+    </section>
+  );
+}
+
+export function BenchPanel({ bench, runId, runs }: { bench: Row; runId: string; runs?: Run[] }) {
   const kinds = Object.keys(bench).sort((a, b) => rank(a) - rank(b));
   return (
     <div className="benches">
+      {runs && <BenchHistory runs={runs} />}
       {kinds.map((k) => (
         <BenchCard key={k} kind={k} b={bench[k] as Row} runId={runId} />
       ))}

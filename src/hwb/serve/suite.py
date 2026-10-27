@@ -5,11 +5,16 @@ template, broken tool-call or reasoning parser). They run with reasoning switche
 temperature 0, so answers are short and deterministic. The load sweep sends distinct
 prompts (no prefix-cache shortcuts) and forces a fixed output length with vLLM's
 ``ignore_eos``, so tokens/s are comparable between runs and rigs.
+
+The default sweep's prompts are one sentence, so it measures decode. Profiles (``--profiles``)
+add the input/output lengths published benchmarks use (vLLM ``bench serve``, NVIDIA, InferenceMAX):
+long prompts load prefill, and with tensor parallelism the PCIe links between the GPUs.
 """
 
 from __future__ import annotations
 
 import json
+import random
 import re
 import time
 from collections.abc import Callable
@@ -17,7 +22,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
-from .client import Reply, chat, percentile
+from ..core.errors import HwbError
+from .client import Reply, chat, get_json, percentile
 
 NEEDLE = "4817"
 # Unknown model: the switches the common chat templates use (Qwen/GLM: enable_thinking,
@@ -178,6 +184,114 @@ TOPICS = (
 )  # fmt: skip
 
 
+@dataclass(frozen=True)
+class Profile:
+    name: str
+    input_tokens: int
+    output_tokens: int
+    about: str
+
+
+# Input/output lengths as published benchmarks pair them (ISL/OSL).
+PROFILES: tuple[Profile, ...] = (
+    Profile("chat", 1024, 1024, "chat: 1k in, 1k out"),
+    Profile("rag", 8192, 1024, "long prompt (RAG, summaries, code review): 8k in, 1k out"),
+    Profile("reasoning", 1024, 8192, "long answer (reasoning, generation): 1k in, 8k out"),
+    Profile("agent", 32768, 1024, "coding-agent context: 32k in, 1k out"),
+)
+_LEN = re.compile(r"^(\d+)(k?)/(\d+)(k?)$")
+
+
+def _tokens(n: str, k: str) -> int:
+    return int(n) * (1024 if k else 1)
+
+
+def parse_profiles(spec: str | None) -> tuple[Profile, ...]:
+    """``chat,rag``, ``all``, or input/output lengths such as ``4k/512``."""
+    out: list[Profile] = []
+    for item in (spec or "").replace(" ", "").lower().split(","):
+        if not item:
+            continue
+        if item == "all":
+            out += [p for p in PROFILES if p not in out]
+        elif known := next((p for p in PROFILES if p.name == item), None):
+            out.append(known)
+        elif m := _LEN.match(item):
+            isl, osl = _tokens(m.group(1), m.group(2)), _tokens(m.group(3), m.group(4))
+            if not isl or not osl:
+                raise HwbError(f"profile {item!r}: lengths must be above 0")
+            out.append(Profile(item, isl, osl, f"{isl} in, {osl} out"))
+        else:
+            names = ", ".join(p.name for p in PROFILES)
+            raise HwbError(f"unknown profile {item!r}: use {names}, all, or IN/OUT such as 4k/512")
+    return tuple(out)
+
+
+_VOCAB = (
+    "harbour ledger manifest tide pier rope invoice cargo crane berth vessel captain pilot "
+    "anchor channel buoy freight customs warehouse dock crew engine hull keel rudder sail mast "
+    "deck cabin galley chart compass beacon storm current wave shore reef lighthouse signal "
+    "voyage route port schedule tonnage container pallet forklift gantry quay mooring tug barge "
+    "ferry tanker draft ballast bunker fuel valve pump boiler turbine shaft propeller winch cable"
+)
+_WORDS = tuple(_VOCAB.split())
+
+
+def filler(seed: int, words: int) -> str:
+    """Prose-like text of about ``words`` words, different for every seed."""
+    rng = random.Random(seed)  # noqa: S311 - benchmark text, not secrets
+    out, sentence = [], []
+    for _ in range(words):
+        sentence.append(rng.choice(_WORDS))
+        if len(sentence) >= rng.randint(8, 16):
+            out.append(" ".join(sentence).capitalize() + ".")
+            sentence = []
+    if sentence:
+        out.append(" ".join(sentence).capitalize() + ".")
+    return " ".join(out)
+
+
+def _prompt(i: int, words: int) -> str:
+    # The request number leads, so no two prompts share a cacheable prefix.
+    return (
+        f"[request {i}] Read these harbour notes, then write a long report on them.\n\n"
+        + filler(i, words)
+    )
+
+
+def tokens_per_word(
+    base: str, model: str, *, no_thinking: dict[str, Any], api_key: str | None = None
+) -> tuple[float, int]:
+    """(tokens per filler word, fixed prompt overhead) from the server's own token counts, so a
+    profile's prompt is as long as it says for this model's tokenizer. Falls back to 1.3 / 64."""
+    extra: dict[str, Any] = {"chat_template_kwargs": no_thinking} if no_thinking else {}
+    counts = []
+    for words in (0, 2000):
+        r = chat(
+            base,
+            model,
+            [{"role": "user", "content": _prompt(-1, words)}],
+            max_tokens=1,
+            api_key=api_key,
+            **extra,
+        )
+        counts.append(r.prompt_tokens if r.ok else None)
+    if counts[0] is None or counts[1] is None or counts[1] <= counts[0]:
+        return 1.3, 64
+    return (counts[1] - counts[0]) / 2000, counts[0]
+
+
+def max_model_len(base: str, model: str, *, api_key: str | None = None) -> int | None:
+    try:
+        data = get_json(f"{base}/v1/models", api_key=api_key)
+    except (OSError, ValueError):
+        return None
+    for m in (data or {}).get("data", []):
+        if isinstance(m, dict) and m.get("id") == model and isinstance(m.get("max_model_len"), int):
+            return int(m["max_model_len"])
+    return None
+
+
 def _ms(v: float | None) -> float | None:
     return None if v is None else round(v * 1000, 1)
 
@@ -192,12 +306,18 @@ def run_level(
     no_thinking: dict[str, Any],
     api_key: str | None = None,
     offset: int = 0,
+    prompt_words: int = 0,
 ) -> dict[str, Any]:
-    """`requests` streaming requests, `concurrency` at a time; aggregate stats."""
+    """`requests` streaming requests, `concurrency` at a time; aggregate stats. With
+    ``prompt_words`` each prompt carries that much distinct text (a profile's input length)."""
 
     def one(i: int) -> Reply:
         topic = TOPICS[(offset + i) % len(TOPICS)]
-        prompt = f"[request {offset + i}] Write a long, detailed explanation of {topic}."
+        prompt = (
+            _prompt(offset + i, prompt_words)
+            if prompt_words
+            else f"[request {offset + i}] Write a long, detailed explanation of {topic}."
+        )
         extra: dict[str, Any] = {"ignore_eos": True, "min_tokens": max_tokens}
         if no_thinking:
             extra["chat_template_kwargs"] = no_thinking
@@ -216,6 +336,8 @@ def run_level(
     wall = time.perf_counter() - t0
     ok = [r for r in replies if r.ok]
     tokens = sum(r.completion_tokens or 0 for r in ok)
+    prompt_tokens = [r.prompt_tokens for r in ok if r.prompt_tokens is not None]
+    inputs = sum(prompt_tokens)
     ttft = [r.ttft_s for r in ok if r.ttft_s is not None]
     tpot = [t for r in ok if (t := r.tpot_s) is not None]
     e2e = [r.duration_s for r in ok]
@@ -230,6 +352,9 @@ def run_level(
         "wall_s": round(wall, 2),
         "req_per_s": round(len(ok) / wall, 3) if wall else None,
         "output_tok_per_s": round(tokens / wall, 1) if wall else None,
+        "input_tok_per_s": round(inputs / wall, 1) if wall and prompt_tokens else None,
+        "total_tok_per_s": round((inputs + tokens) / wall, 1) if wall and prompt_tokens else None,
+        "prompt_tokens_mean": round(inputs / len(prompt_tokens)) if prompt_tokens else None,
         "per_request_tok_per_s": round(1 / tpot_p50, 1) if tpot_p50 else None,
         "ttft_ms_p50": _ms(percentile(ttft, 50)),
         "ttft_ms_p90": _ms(percentile(ttft, 90)),

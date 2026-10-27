@@ -29,6 +29,7 @@ gateway/               Cloudflare Worker (JS): R2 report store, D1 analysis tabl
   detect/gpu.py        gather() -> GpuFacts snapshot; checks are pure fns of GpuFacts
   metrics/collect.py   inventory collectors (sysfs/procfs first, CLI tools second)
   install/plan.py      per-distro install plans as data (Step lists); execute() only with --apply
+  config.py            `hwb config`: ~/.config/hwb/config.json (submit ask|auto|off, label, gateway); env wins
   update.py            daily release check (redirect of /releases/latest, cached in $HWB_HOME) + `hwb update --apply` self-replace
   share/               `hwb submit`: sanitize.py (privacy scrub; keep in sync with gateway/src/sanitize.js),
                        client.py (urllib upload/delete, terminal QR), command.py (preview + confirm flow)

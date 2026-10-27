@@ -14,6 +14,7 @@ from typing import Any, ClassVar
 import pytest
 
 from hwb import cli
+from hwb import config as hwb_config
 from hwb.share import client
 from hwb.share.sanitize import rig_alias, sanitize_bundle
 
@@ -379,3 +380,83 @@ def test_short_screens_get_the_narrow_quiet_zone() -> None:
     assert client.fit_quiet(37, "full", 44) == 2  # 41 lines with a 2-module border
     full = client.render_qr(QR, color=True, style="full", quiet=2)
     assert len(full.splitlines()) == 4 + 4
+
+
+# ---------------------------------------------------------------- hwb config / submit after a run
+
+
+def test_config_set_show_unset(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert cli.main(["config", "set", "submit", "AUTO"]) == 0
+    assert cli.main(["config", "set", "label", "rack 7"]) == 0
+    saved = json.loads((tmp_path / "hwb-config.json").read_text())
+    assert saved == {"label": "rack 7", "submit": "auto"}
+    assert "uploaded, sanitized" in capsys.readouterr().out
+
+    assert cli.main(["config"]) == 0
+    shown = capsys.readouterr().out
+    assert re.search(r"submit\s+auto", shown) and re.search(r"label\s+rack 7", shown)
+
+    assert cli.main(["config", "unset", "label"]) == 0
+    assert json.loads((tmp_path / "hwb-config.json").read_text()) == {"submit": "auto"}
+    assert cli.main(["config", "set", "submit", "always"]) == cli.EXIT_ERROR
+    assert cli.main(["config", "set", "submit"]) == cli.EXIT_ERROR
+
+
+def test_env_overrides_the_config_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert cli.main(["config", "set", "submit", "auto"]) == 0
+    monkeypatch.setenv(hwb_config.ENV_SUBMIT, "off")
+    assert hwb_config.load().submit == "off"
+    monkeypatch.setenv(hwb_config.ENV_SUBMIT, "sometimes")
+    with pytest.raises(hwb_config.ConfigError):
+        hwb_config.load()
+
+
+def test_auto_submit_uploads_the_finished_run_without_asking(tmp_path: Path, gateway: str) -> None:
+    out = tmp_path / "runs"
+    assert cli.main(["config", "set", "submit", "auto"]) == 0
+    assert cli.main(["config", "set", "gateway", gateway]) == 0
+    assert cli.main(["config", "set", "label", "soak 8h"]) == 0
+    code = cli.main(["--out", str(out), "info"])  # stdin is not a terminal here
+
+    assert code in (0, 1)  # off Linux some checks fail; the upload happens either way
+    ((method, path, _, body),) = _Gateway.received
+    sent = json.loads(body)
+    assert (method, path) == ("POST", "/api/reports")
+    assert [r["report"]["command"] for r in sent["runs"]] == ["info"]
+    assert sent["label"] == "soak 8h"
+    assert (out / client.SUBMISSIONS).exists()
+
+
+def test_auto_submit_skips_plans_and_respects_gateway_off(
+    tmp_path: Path, gateway: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert cli.main(["config", "set", "submit", "auto"]) == 0
+    assert cli.main(["config", "set", "gateway", gateway]) == 0
+    cli.main(["--out", str(tmp_path / "runs"), "install", "tools"])
+    monkeypatch.setenv(client.ENV_GATEWAY, "off")
+    cli.main(["--out", str(tmp_path / "runs"), "info"])
+    assert _Gateway.received == []
+
+
+def test_ask_mode_stays_silent_without_a_terminal(tmp_path: Path, gateway: str) -> None:
+    assert cli.main(["config", "set", "gateway", gateway]) == 0
+    cli.main(["--out", str(tmp_path / "runs"), "info"])
+    assert _Gateway.received == []
+
+
+def test_a_test_run_is_sent_with_the_latest_info_run(tmp_path: Path) -> None:
+    for run_id, command, started in (
+        ("20261026T100000Z-rig-info", "info", "2026-10-26T10:00:00"),
+        ("20261026T110000Z-rig-info", "info", "2026-10-26T11:00:00"),
+        ("20261026T120000Z-rig-serve", "serve", "2026-10-26T12:00:00"),
+    ):
+        (tmp_path / run_id).mkdir()
+        report = {"command": command, "started_at": started}
+        (tmp_path / run_id / "report.json").write_text(json.dumps(report))
+    assert cli._context_runs(tmp_path, "20261026T120000Z-rig-serve", "serve") == [
+        "20261026T110000Z-rig-info",
+        "20261026T120000Z-rig-serve",
+    ]
+    assert cli._context_runs(tmp_path, "20261026T110000Z-rig-info", "info") == [
+        "20261026T110000Z-rig-info"
+    ]

@@ -249,6 +249,26 @@ Limits on the public gateway: uploads up to 512 kB (hwb refuses bigger ones befo
 
 When hwb runs in a terminal, every command offers to submit when it finishes. Answering anything but `y` skips it, and the command's exit code is unaffected. `HWB_GATEWAY=off` turns the offer off.
 
+To submit every test without being asked, set `hwb config set submit auto` (below). This also works when nobody watches the terminal, e.g. a long `hwb serve` in tmux or nohup.
+
+### `config`
+
+```
+hwb config                       # show the settings and the file they live in
+hwb config set KEY VALUE
+hwb config unset KEY
+```
+
+| key | values | |
+|---|---|---|
+| `submit` | `ask` (default), `auto`, `off` | after a run: offer to submit (interactive runs only), submit without asking, or say nothing |
+| `label` | text | label for submitted reports, e.g. a rack position (`--label` wins) |
+| `gateway` | URL | gateway for submissions (`--gateway` and `HWB_GATEWAY` win) |
+
+With `submit auto`, each finished run is sanitized and uploaded as soon as it ends, together with the newest `info` run in `--out` for the hardware context, and the link and QR code are printed. Runs stopped with Ctrl-C, `install` plans and `--dry-run` runs are not sent. Runs that ended in an error are sent, so someone off-site can see why. A failed upload (offline, rate limit) is reported and leaves the exit code alone; `hwb submit` sends it later.
+
+The settings live in `~/.config/hwb/config.json` (`$XDG_CONFIG_HOME`, or the file `$HWB_CONFIG` names). Under `sudo`, hwb reads the invoking user's file when root has none, so `sudo hwb info` and `hwb serve` follow the same settings. `HWB_SUBMIT=ask|auto|off` overrides `submit` for one run, and `HWB_GATEWAY=off` still turns sharing off entirely.
+
 ---
 
 ## Reading the results

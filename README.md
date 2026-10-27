@@ -61,7 +61,7 @@ Each run also writes its own files to `./hwb-runs/<UTC time>-<host>-<command>/`:
 - It shows what will be sent and asks for confirmation.
 - It prints a link and a QR code.
 
-Interactive runs offer to submit at the end; `HWB_GATEWAY=off` turns that off.
+Interactive runs offer to submit at the end; `hwb config set submit auto` submits every run without asking (also in tmux or nohup), and `HWB_GATEWAY=off` turns sharing off.
 
 ## Documentation
 

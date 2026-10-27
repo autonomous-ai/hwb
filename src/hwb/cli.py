@@ -15,12 +15,13 @@ from pathlib import Path
 from types import FrameType
 
 from . import __version__, bench, serve, update
+from . import config as hwb_config
 from .core.context import RunContext
 from .core.errors import HwbError
 from .core.log import setup_logging
 from .core.platform import is_linux, os_info
 from .core.report import render_console, write_report
-from .core.report_html import INDEX_HTML
+from .core.report_html import INDEX_HTML, collect_runs
 from .detect.gpu import run_detect
 from .install import plan as install
 from .metrics.collect import run_info
@@ -149,7 +150,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--gateway",
         help=f"gateway URL (default: ${share_client.ENV_GATEWAY}, else {share_client.DEFAULT_GATEWAY})",
     )
-    sb.add_argument("--label", help="short label shown with the report, e.g. a rack position")
+    sb.add_argument(
+        "--label",
+        help="short label shown with the report, e.g. a rack position (default: hwb config label)",
+    )
     sb.add_argument(
         "--run",
         action="append",
@@ -172,6 +176,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     up.add_argument("--apply", action="store_true", help="install the newer release")
     up.add_argument("-y", "--yes", action="store_true", help="skip the confirmation prompt")
+
+    cf = sub.add_parser(
+        "config",
+        help="show or change saved settings, e.g. submit every run automatically",
+        description="Settings kept in "
+        f"{hwb_config.FILE} under $XDG_CONFIG_HOME (~/.config) or ${hwb_config.ENV_CONFIG}. "
+        "`hwb config set submit auto` uploads each finished run (with the latest info run for "
+        "context) to the gateway without asking, also when nobody watches the terminal.",
+    )
+    cf.add_argument("action", nargs="?", choices=("show", "set", "unset"), default="show")
+    cf.add_argument("key", nargs="?", choices=tuple(hwb_config.KEYS))
+    cf.add_argument("value", nargs="?")
     return p
 
 
@@ -293,15 +309,16 @@ def _cmd_submit(args: argparse.Namespace) -> int:
     setup_logging(None, verbose=args.verbose)
     token = os.environ.get(share_client.ENV_TOKEN)
     try:
+        settings = hwb_config.load()
         if args.delete:
             return share.delete_submission(
                 args.out, args.delete, gateway=args.gateway, assume_yes=args.yes
             )
         return share.submit_runs(
             args.out,
-            gateway=args.gateway,
+            gateway=args.gateway or os.environ.get(share_client.ENV_GATEWAY) or settings.gateway,
             token=token,
-            label=args.label,
+            label=args.label or settings.label,
             only=args.run,
             assume_yes=args.yes,
             dry_run=args.dry_run,
@@ -311,6 +328,34 @@ def _cmd_submit(args: argparse.Namespace) -> int:
     except HwbError as exc:
         log.error("%s", exc)
         return EXIT_ERROR
+
+
+def _cmd_config(args: argparse.Namespace) -> int:
+    setup_logging(None, verbose=args.verbose)
+    try:
+        if args.action == "show":
+            settings = hwb_config.load()
+            print(f"config file: {hwb_config.path()}")
+            for key, about in hwb_config.KEYS.items():
+                value = getattr(settings, key)
+                print(f"  {key:<8} {value if value is not None else '-':<40} {about}")
+            if os.environ.get(hwb_config.ENV_SUBMIT):
+                print(f"  ({hwb_config.ENV_SUBMIT} overrides submit)")
+            return 0
+        if not args.key or (args.action == "set") != (args.value is not None):
+            usage = "set KEY VALUE" if args.action == "set" else "unset KEY"
+            raise hwb_config.ConfigError(f"usage: hwb config {usage}")
+        path = hwb_config.write(args.key, args.value if args.action == "set" else None)
+    except hwb_config.ConfigError as exc:
+        log.error("%s", exc)
+        return EXIT_ERROR
+    print(f"{args.key} {'= ' + args.value if args.action == 'set' else 'removed'} in {path}")
+    if args.key == "submit" and args.value and args.value.strip().lower() == "auto":
+        print(
+            "Every finished run will now be uploaded, sanitized, to the gateway without asking; "
+            "anyone with a report's link can view it. Undo: hwb config set submit ask"
+        )
+    return 0
 
 
 def _cmd_update(args: argparse.Namespace) -> int:
@@ -337,19 +382,56 @@ def _update_notice() -> None:
         print(f"\n{line}", file=sys.stderr)
 
 
-def _offer_submit(out: Path) -> None:
-    """After an interactive run, offer to share it (the operator still confirms).
-    HWB_GATEWAY=off turns the offer off."""
-    if not share_client.sharing_enabled() or not (sys.stdin.isatty() and sys.stdout.isatty()):
+def _context_runs(out: Path, run_id: str, command: str) -> list[str]:
+    """The run just made, plus the newest info run before it for the hardware context."""
+    if command in ("info", "all"):
+        return [run_id]
+    infos = [
+        r["id"]
+        for r in collect_runs(out)
+        if r["report"].get("command") == "info" and r["id"] != run_id
+    ]
+    return [*infos[-1:], run_id]
+
+
+def _submit_after_run(args: argparse.Namespace, ctx: RunContext, code: int | None) -> None:
+    """After a run: offer to share it ("ask", interactive only), or share it right away
+    ("auto": `hwb config set submit auto`). HWB_GATEWAY=off turns both off. Sharing is
+    optional and never changes the run's own exit code."""
+    if not share_client.sharing_enabled() or code == EXIT_INTERRUPTED:
         return
-    gateway = share_client.resolve_gateway()
-    print()
     try:
-        share.submit_runs(
-            out, gateway=gateway, token=os.environ.get(share_client.ENV_TOKEN), label=None
-        )
+        settings = hwb_config.load()
+    except hwb_config.ConfigError as exc:
+        print(f"not submitted: {exc}", file=sys.stderr)
+        return
+    gateway = os.environ.get(share_client.ENV_GATEWAY) or settings.gateway
+    token = os.environ.get(share_client.ENV_TOKEN)
+    try:
+        if settings.submit == "auto":
+            # A plan that was not applied or a dry run is not a test result worth publishing.
+            if args.command == "install" or getattr(args, "dry_run", False):
+                return
+            print("\nSubmitting (hwb config: submit auto)")
+            share.submit_runs(
+                args.out,
+                gateway=share_client.resolve_gateway(gateway),
+                token=token,
+                label=settings.label,
+                only=_context_runs(args.out, ctx.run_dir.name, args.command),
+                assume_yes=True,
+            )
+        elif settings.submit == "ask" and code is None:
+            if not (sys.stdin.isatty() and sys.stdout.isatty()):
+                return
+            print()
+            share.submit_runs(
+                args.out,
+                gateway=share_client.resolve_gateway(gateway),
+                token=token,
+                label=settings.label,
+            )
     except (HwbError, KeyboardInterrupt) as exc:
-        # Sharing is optional; it never changes the run's own exit code.
         print(f"not submitted: {exc or 'interrupted'}", file=sys.stderr)
 
 
@@ -359,6 +441,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _cmd_submit(args)
     if args.command == "update":
         return _cmd_update(args)
+    if args.command == "config":
+        return _cmd_config(args)
     if args.command == "serve" and args.list:  # informational: no run directory
         return _serve_list()
     try:
@@ -392,8 +476,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"\nreport: {report}")
         if (index := args.out / INDEX_HTML).exists():
             print(f"view:   {index}  (all runs in {args.out})")
-    if code is None:
-        _offer_submit(args.out)
+    _submit_after_run(args, ctx, code)
     _update_notice()
     return code if code is not None else ctx.exit_code()
 

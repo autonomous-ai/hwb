@@ -30,11 +30,11 @@ FAKE_SERVER = textwrap.dedent(
     def answer(body):
         prompt = body["messages"][-1]["content"]
         if body.get("tools") and not MODE["no_tools"]:
-            return None, [{"name": "get_weather", "arguments": '{"city": "Hanoi"}'}]
+            return None, [{"name": "get_weather", "arguments": '{"city": "Chicago"}'}]
         if MODE["wrong"]:
             return "I am not sure.", []
         if "17 * 23" in prompt: return "391", []
-        if "capital of France" in prompt: return '{"city": "Paris", "country": "France"}', []
+        if "capital of Texas" in prompt: return '{"city": "Austin", "state": "Texas"}', []
         if "is_prime" in prompt: return "def is_prime(n):\\n    return n > 1 and all(n % d for d in range(2, n))", []
         if "vault code" in prompt: return "4817", []
         n = body.get("max_tokens", 16)
@@ -190,7 +190,7 @@ def test_streaming_client_measures_and_reassembles(endpoint: str) -> None:
         max_tokens=20,
         tools=[suite.WEATHER_TOOL],
     )
-    assert t.tool_calls == [{"name": "get_weather", "arguments": '{"city": "Hanoi"}'}]
+    assert t.tool_calls == [{"name": "get_weather", "arguments": '{"city": "Chicago"}'}]
     bad = client.chat("http://127.0.0.1:9", "m", [], max_tokens=1, timeout=2)
     assert not bad.ok and bad.error
 

@@ -164,7 +164,7 @@ Hosts a real model with vLLM, or tests one that's already running, and measures 
    - JSON-only output;
    - writing a Python function;
    - recalling a code hidden in a ~6000-word context;
-   - a tool call (`get_weather("Hanoi")`), which only passes when the tool-call parser is set up.
+   - a tool call (`get_weather("Chicago")`), which only passes when the tool-call parser is set up.
 2. **Load test** at each `--concurrency` level, sending `--requests × concurrency` distinct streaming requests with a fixed output length (`--max-tokens`, forced with vLLM's `ignore_eos`). It records:
    - output tokens/s in total and per request;
    - time to first token (p50/p90/p99);

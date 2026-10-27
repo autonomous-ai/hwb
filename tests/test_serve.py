@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 
 from hwb import cli
+from hwb.core.errors import HwbError
 from hwb.serve import client, presets, suite
 
 # A minimal vLLM: answers the check prompts, streams forced-length output, reports usage.
@@ -48,7 +49,7 @@ FAKE_SERVER = textwrap.dedent(
             self.send_header("Content-Length", str(len(raw))); self.end_headers(); self.wfile.write(raw)
         def do_GET(self):
             if self.path == "/health": self._json(200, {})
-            elif self.path == "/v1/models": self._json(200, {"data": [{"id": "fake-model"}]})
+            elif self.path == "/v1/models": self._json(200, {"data": [{"id": "fake-model", "max_model_len": 20000}]})
             else: self._json(404, {"message": "no"})
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
@@ -64,7 +65,8 @@ FAKE_SERVER = textwrap.dedent(
             for i, p in enumerate(pieces):
                 time.sleep(0.001)
                 send({"choices": [{"delta": {"content": p if i == 0 else " " + p}}]})
-            send({"choices": [], "usage": {"prompt_tokens": 12, "completion_tokens": max(len(pieces), len(calls))}})
+            prompt_tokens = 10 + len(body["messages"][-1]["content"].split())  # one token per word
+            send({"choices": [], "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": max(len(pieces), len(calls))}})
             self.wfile.write(b"data: [DONE]\\n\\n"); self.wfile.flush()
             self.close_connection = True
 
@@ -265,6 +267,38 @@ def test_endpoint_mode_tests_a_running_server(endpoint: str, tmp_path: Path) -> 
         "c=1",
         "c=2",
     ]  # local: sampled
+
+
+def test_profiles_send_prompts_of_the_asked_length(endpoint: str, tmp_path: Path) -> None:
+    out = tmp_path / "runs"
+    argv = ["--out", str(out), "serve", "--endpoint", endpoint, "--concurrency", "1",
+            "--requests", "2", "--max-tokens", "8", "--profiles", "2k/16,agent"]  # fmt: skip
+    assert cli.main(argv) == 0
+    report = _report(out)
+    st = {r["name"]: r["status"] for r in report["results"]}
+    assert st["serve.profile.2k/16"] == "pass" and st["serve.load"] == "pass"
+    assert st["serve.profile.agent"] == "skip"  # 32k + 1k does not fit the server's 20000
+    sec = report["sections"]["bench"]["serve"]
+    custom, agent = sec["profiles"]
+    (lv,) = custom["levels"]
+    assert abs(lv["prompt_tokens_mean"] - 2048) < 64 and lv["completion_tokens"] == 2 * 16
+    assert lv["total_tok_per_s"] > lv["output_tok_per_s"] > 0
+    assert "allows 20000" in agent["skipped"] and not agent["levels"]
+    assert [p["name"] for p in sec["timeseries"]["phases"]][-1] == "2k/16 c=1"
+
+
+def test_profile_specs() -> None:
+    assert [p.name for p in suite.parse_profiles("chat, rag")] == ["chat", "rag"]
+    assert [p.name for p in suite.parse_profiles("all")] == [p.name for p in suite.PROFILES]
+    (custom,) = suite.parse_profiles("4k/512")
+    assert (custom.input_tokens, custom.output_tokens) == (4096, 512)
+    assert suite.parse_profiles(None) == ()
+    for bad in ("huge", "0/10", "4k-512"):
+        with pytest.raises(HwbError):
+            suite.parse_profiles(bad)
+    # every request reads different text, so prefix caching cannot shortcut the prefill
+    assert suite.filler(1, 200) != suite.filler(2, 200)
+    assert 190 <= len(suite.filler(1, 200).split()) <= 200
 
 
 def test_launch_mode_starts_tests_and_stops_vllm(fake_module: Path, tmp_path: Path) -> None:

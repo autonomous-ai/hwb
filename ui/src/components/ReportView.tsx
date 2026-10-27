@@ -464,7 +464,7 @@ export function ReportView({
           "checks",
           <ChecksPanel view={view} active={active} setActive={setActive} query={query} setQuery={setQuery} focus={check} />,
         )}
-      {bench && panel("bench", <BenchPanel bench={bench} runId={view.id} />)}
+      {bench && panel("bench", <BenchPanel bench={bench} runId={view.id} runs={view.kind === "overview" ? view.runs : undefined} />)}
       {inv && panel("inventory", <Inventory inv={inv} />)}
       {facts && panel("driver", <DriverFacts facts={facts} showSmi={invGpus.length === 0} />)}
       {plan && panel("plan", <InstallPlan plan={plan} dryRun={dryRun} />)}

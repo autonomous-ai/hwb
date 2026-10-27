@@ -154,6 +154,7 @@ hwb serve --list
 hwb serve [--preset NAME | --model HF_ID_OR_DIR] [--dry-run] [--install-vllm | --vllm PATH] [--force]
 hwb serve --endpoint http://host:8000 [--model NAME] [--preset NAME]
           [--concurrency 1,4,16] [--requests 4] [--max-tokens 256] [--ready-timeout 3600]
+          [--profiles chat,rag,reasoning,agent | all | IN/OUT]
 ```
 
 Hosts a real model with vLLM, or tests one that's already running, and measures it. **Step-by-step guide: [Serving and testing a model](serve.md).**
@@ -170,7 +171,19 @@ Hosts a real model with vLLM, or tests one that's already running, and measures 
    - time per output token;
    - the longest pause between chunks;
    - errors.
-3. **Sampling throughout:** the sampler records GPU temperature, power, clocks and PCIe links for both phases. The Benchmarks tab shows the checks, a table per concurrency level and the charts.
+
+   This default sweep sends one-sentence prompts, so it measures decode. It stays the default, so runs compare across rigs and over time.
+3. **Profiles** (`--profiles`, optional) repeat the load test at the same concurrency levels with the input and output lengths published benchmarks use (vLLM `bench serve`, NVIDIA, SemiAnalysis InferenceMAX):
+
+   | profile | input / output tokens | stands for |
+   |---|---|---|
+   | `chat` | 1k / 1k | chat |
+   | `rag` | 8k / 1k | long prompts: RAG, summaries, code review |
+   | `reasoning` | 1k / 8k | long answers: reasoning, generation |
+   | `agent` | 32k / 1k | a coding agent's context |
+
+   `all` runs the four; `IN/OUT` such as `4k/512` sets your own. Each prompt is distinct text (no prefix-cache shortcut), sized with the server's own token counts so it is as long as the profile says. A profile that needs more context than the server allows is skipped. Profiles report input, output and total tokens/s besides the latency figures, as `serve.profile.<name>` results. Long prompts load prefill, and with tensor parallelism the PCIe links between the GPUs, harder than the default sweep.
+4. **Sampling throughout:** the sampler records GPU temperature, power, clocks and PCIe links for every phase. The Benchmarks tab shows the checks, one load table per test (the default sweep, then each profile) and the charts. On the Overview, **All benchmark runs** lines up every run of the report, grouped by benchmark and, for serving, by model, one row per test.
 
 **What it launches:**
 - `--endpoint URL` tests that server and starts nothing. The model name it reports selects the matching preset's settings, such as how to switch reasoning off and whether a tool-call parser is expected. With no matching preset, both common switches are sent (`enable_thinking` and `thinking` set to false).
@@ -180,7 +193,7 @@ Hosts a real model with vLLM, or tests one that's already running, and measures 
 - `--dry-run` prints the exact command and where the weights come from, then stops.
 - **Model weights:** hwb finds weights already on the machine (Hugging Face caches including other users', ModelScope, plain directories, plus Ollama and LM Studio as GGUF). With no `--preset`, it prefers a preset that's already on disk. `--model` launches any model found here without a preset. New downloads go to the shared Hugging Face cache (`HF_HOME`), after a free-space check. Details: [Serving and testing a model](serve.md#model-weights-reuse-whats-on-disk-share-whats-downloaded).
 
-**vLLM** comes from `--vllm PATH`, then `$HWB_HOME/venvs/vllm`, then `PATH`. `--install-vllm` creates that venv with uv's own Python (it ships the headers Triton compiles against), installs the pinned version plus extras such as `b12x` for Blackwell kernels, pins the venv's pip `nvcc` to the CUDA version torch was built for, and fetches FlashInfer's prebuilt kernels (`vllm download-kernels`). Nothing is installed into the system or core Python. At launch hwb puts the venv's `bin` on `PATH` and, points `CUDA_HOME` at the venv's pip toolkit when the rig has no CUDA toolkit or an older one (Ubuntu's `nvidia-cuda-toolkit` is CUDA 12.0, which knows no Blackwell), so JIT-compiled kernels (DeepGEMM, FlashInfer) build for the GPU. A `CUDA_HOME` you set yourself is kept. It also sets `VLLM_SKIP_P2P_CHECK=0`, so vLLM tests GPU peer-to-peer copies instead of trusting the driver. If vLLM fails to start, hwb prints the worker's own error under "Root cause", with a hint when it recognizes it. Hugging Face downloads use `HF_TOKEN` if it's set; the presets' models are public, so it's optional. `HWB_LLM_API_KEY` is sent as a Bearer token to servers that require one.
+**vLLM** comes from `--vllm PATH`, then `$HWB_HOME/venvs/vllm`, then `PATH`. `--install-vllm` creates that venv with uv's own Python (it ships the headers Triton compiles against), installs the pinned version plus extras such as `b12x` for Blackwell kernels, pins the venv's pip `nvcc` to the CUDA version torch was built for, and fetches FlashInfer's prebuilt kernels (`vllm download-kernels`). Nothing is installed into the system or core Python. At launch hwb puts the venv's `bin` on `PATH`, points `CUDA_HOME` at the venv's pip toolkit when the rig has no CUDA toolkit or an older one (Ubuntu's `nvidia-cuda-toolkit` is CUDA 12.0, which knows no Blackwell), so JIT-compiled kernels (DeepGEMM, FlashInfer) build for the GPU. A `CUDA_HOME` you set yourself is kept. It also sets `VLLM_SKIP_P2P_CHECK=0`, so vLLM tests GPU peer-to-peer copies instead of trusting the driver. If vLLM fails to start, hwb prints the worker's own error under "Root cause", with a hint when it recognizes it. Hugging Face downloads use `HF_TOKEN` if it's set; the presets' models are public, so it's optional. `HWB_LLM_API_KEY` is sent as a Bearer token to servers that require one.
 
 **Presets** (`hwb serve --list`) are per hardware profile:
 - **"verified"** means the exact command ran on that hardware.
@@ -190,8 +203,8 @@ The presets for **2× RTX PRO 6000 Blackwell** (2 × 96 GB, sm_120):
 
 | preset | model | weights | status |
 |---|---|---|---|
-| `deepseek-v4-flash-vision` | deepseek-ai/DeepSeek-V4-Flash-Vision-Exp @ `6821d6a` | 168 GB fp8 + fp4 experts | ran in production on another vLLM build; fails with the pinned vLLM 0.32.0 on SM120 (DeepGEMM o_proj) |
-| `deepseek-v4-flash` | deepseek-ai/DeepSeek-V4-Flash-0731 | 167 GB | fails like the vision preset |
+| `deepseek-v4-flash-vision` | deepseek-ai/DeepSeek-V4-Flash-Vision-Exp @ `6821d6a` | 168 GB fp8 + fp4 experts | ran in production on another vLLM build; with vLLM 0.32.0 it starts and passes the answer checks without `--linear-backend b12x` |
+| `deepseek-v4-flash` | deepseek-ai/DeepSeek-V4-Flash-0731 | 167 GB | same flags as the vision preset; untested |
 | `qwen3.5-122b-a10b-nvfp4` (default) | nvidia/Qwen3.5-122B-A10B-NVFP4 | 84 GB | verified (886 tok/s at 16 concurrent) |
 | `qwen3.8-flash-next-nvfp4` | nvidia/Qwen3.8-Flash-Next-NVFP4 | 133 GB | untested |
 | `qwen3.6-35b-a3b-fp8` | Qwen/Qwen3.6-35B-A3B-FP8 (one copy per GPU) | 38 GB | untested |

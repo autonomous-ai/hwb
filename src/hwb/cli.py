@@ -117,6 +117,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     s.add_argument("--max-tokens", type=int, default=256, help="output tokens per load request")
     s.add_argument(
+        "--profiles",
+        metavar="LIST",
+        help="after the default sweep, load tests with long prompts at the same concurrency levels: "
+        + ", ".join(
+            f"{p.name} ({p.input_tokens // 1024}k/{p.output_tokens // 1024}k)"
+            for p in serve.suite.PROFILES
+        )
+        + ", all, or IN/OUT such as 4k/512",
+    )
+    s.add_argument(
         "--ready-timeout", type=int, default=3600, help="seconds to wait for vLLM to load"
     )
     s.add_argument("--interval", type=float, default=1.0, help="sampling interval (s)")
@@ -239,6 +249,7 @@ def _serve_options(args: argparse.Namespace) -> serve.ServeOptions:
         install_vllm=args.install_vllm,
         dry_run=args.dry_run,
         force=args.force,
+        profiles=serve.suite.parse_profiles(args.profiles),
     )
 
 

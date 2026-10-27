@@ -74,6 +74,7 @@ class ServeOptions:
     install_vllm: bool = False
     dry_run: bool = False
     force: bool = False
+    profiles: tuple[suite.Profile, ...] = ()  # extra input/output-length tests after the sweep
 
 
 def hwb_home() -> Path:
@@ -296,6 +297,79 @@ def _summary(level: dict[str, Any]) -> str:
     return ", ".join(parts)
 
 
+def _run_profiles(
+    base: str,
+    model: str,
+    opts: ServeOptions,
+    sampler: Sampler,
+    no_thinking: dict[str, Any],
+    api_key: str | None,
+    offset: int,
+) -> list[dict[str, Any]]:
+    """Each --profiles entry over the same concurrency levels, with prompts as long as it says."""
+    if not opts.profiles:
+        return []
+    per_word, overhead = suite.tokens_per_word(
+        base, model, no_thinking=no_thinking, api_key=api_key
+    )
+    limit = suite.max_model_len(base, model, api_key=api_key)
+    out: list[dict[str, Any]] = []
+    for prof in opts.profiles:
+        entry: dict[str, Any] = {
+            "name": prof.name, "about": prof.about, "input_tokens": prof.input_tokens,
+            "output_tokens": prof.output_tokens, "levels": [],
+        }  # fmt: skip
+        out.append(entry)
+        if limit and prof.input_tokens + prof.output_tokens > limit:
+            entry["skipped"] = (
+                f"needs {prof.input_tokens + prof.output_tokens} tokens of context; "
+                f"the server allows {limit}"
+            )
+            continue
+        words = max(1, round((prof.input_tokens - overhead) / per_word))
+        for c in opts.concurrency:
+            sampler.phase(f"{prof.name} c={c}")
+            n = max(c * opts.requests_per_level, 1)
+            entry["levels"].append(
+                suite.run_level(
+                    base, model, concurrency=c, requests=n, max_tokens=prof.output_tokens,
+                    no_thinking=no_thinking, api_key=api_key, offset=offset, prompt_words=words,
+                )
+            )  # fmt: skip
+            offset += n
+    return out
+
+
+def _profile_result(prof: dict[str, Any]) -> CheckResult:
+    name = f"serve.profile.{prof['name']}"
+    if prof.get("skipped"):
+        return CheckResult(name, Status.SKIP, f"{prof['about']}: {prof['skipped']}")
+    levels = prof["levels"]
+    ok_levels = [lv for lv in levels if lv["ok"]]
+    errors = sum(lv["errors"] for lv in levels)
+    if not ok_levels:
+        first = levels[0]["first_error"] if levels else "?"
+        return CheckResult(
+            name, Status.FAIL, f"{prof['about']}: every request failed: {first}",
+            data={"levels": levels}, hint="see vllm.log in the run directory",
+        )  # fmt: skip
+    best = max(ok_levels, key=lambda lv: lv["total_tok_per_s"] or lv["output_tok_per_s"] or 0)
+    text = f"{prof['about']}: "
+    if best.get("total_tok_per_s"):
+        text += f"{best['total_tok_per_s']} tok/s in+out ({best['output_tok_per_s']} out)"
+    else:
+        text += f"{best['output_tok_per_s']} tok/s out"
+    text += f" at {best['concurrency']} concurrent"
+    if best.get("ttft_ms_p50") is not None:
+        text += f", TTFT p50 {best['ttft_ms_p50']:.0f} ms"
+    if errors:
+        text += f"; {errors} requests failed"
+    return CheckResult(
+        name, Status.WARN if errors else Status.PASS, text, data={"levels": levels},
+        hint="see vllm.log in the run directory" if errors else None,
+    )  # fmt: skip
+
+
 def _test(
     ctx: RunContext,
     base: str,
@@ -325,7 +399,10 @@ def _test(
                 )
             )  # fmt: skip
             offset += n
+        profiles = _run_profiles(base, model, opts, s, no_thinking, api_key, offset)
     section |= {"checks": checks, "load": levels}
+    if profiles:
+        section["profiles"] = profiles
     if sample:
         section["timeseries"] = s.result.to_report()
 
@@ -360,6 +437,8 @@ def _test(
             hint="see vllm.log in the run directory" if errors else None,
         )
     )  # fmt: skip
+    for prof in profiles:
+        ctx.add(_profile_result(prof))
     if sample and s.result.meta.get("pcie"):
         # serving is often the heaviest PCIe traffic a rig sees (tensor-parallel all-reduce)
         found = analysis.pcie_findings(s.result)

@@ -179,13 +179,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     cf = sub.add_parser(
         "config",
-        help="show or change saved settings, e.g. submit every run automatically",
-        description="Settings kept in "
-        f"{hwb_config.FILE} under $XDG_CONFIG_HOME (~/.config) or ${hwb_config.ENV_CONFIG}. "
+        help="change saved settings in a menu, e.g. submit every run automatically",
+        description="Without arguments in a terminal: a menu to change the settings. "
+        "Settings are kept in "
+        f"{hwb_config.FILE} under $XDG_CONFIG_HOME (~/.config) or ${hwb_config.ENV_CONFIG}; "
+        "`show`, `set` and `unset` work in scripts. "
         "`hwb config set submit auto` uploads each finished run (with the latest info run for "
         "context) to the gateway without asking, also when nobody watches the terminal.",
     )
-    cf.add_argument("action", nargs="?", choices=("show", "set", "unset"), default="show")
+    cf.add_argument("action", nargs="?", choices=("show", "set", "unset"))
     cf.add_argument("key", nargs="?", choices=tuple(hwb_config.KEYS))
     cf.add_argument("value", nargs="?")
     return p
@@ -333,7 +335,13 @@ def _cmd_submit(args: argparse.Namespace) -> int:
 def _cmd_config(args: argparse.Namespace) -> int:
     setup_logging(None, verbose=args.verbose)
     try:
-        if args.action == "show":
+        if args.action is None and sys.stdin.isatty() and sys.stdout.isatty():
+            try:
+                hwb_config.menu()
+            except (EOFError, KeyboardInterrupt):
+                print()
+            return 0
+        if args.action in (None, "show"):
             settings = hwb_config.load()
             print(f"config file: {hwb_config.path()}")
             for key, about in hwb_config.KEYS.items():
@@ -351,10 +359,7 @@ def _cmd_config(args: argparse.Namespace) -> int:
         return EXIT_ERROR
     print(f"{args.key} {'= ' + args.value if args.action == 'set' else 'removed'} in {path}")
     if args.key == "submit" and args.value and args.value.strip().lower() == "auto":
-        print(
-            "Every finished run will now be uploaded, sanitized, to the gateway without asking; "
-            "anyone with a report's link can view it. Undo: hwb config set submit ask"
-        )
+        print(f"{hwb_config.AUTO_WARNING} Undo: hwb config set submit ask")
     return 0
 
 

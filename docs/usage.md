@@ -254,10 +254,13 @@ To submit every test without being asked, set `hwb config set submit auto` (belo
 ### `config`
 
 ```
-hwb config                       # show the settings and the file they live in
-hwb config set KEY VALUE
+hwb config                       # in a terminal: a menu to change the settings
+hwb config show                  # print the settings and the file they live in
+hwb config set KEY VALUE         # for scripts
 hwb config unset KEY
 ```
+
+The menu lists the settings with numbers. Type a number to change one: `submit` offers its three choices by number, and `label` and `gateway` take text (Enter keeps the value, `-` clears it). Each change is saved at once; `q` quits. Without a terminal, `hwb config` prints the settings like `show`.
 
 | key | values | |
 |---|---|---|

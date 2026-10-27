@@ -460,3 +460,24 @@ def test_a_test_run_is_sent_with_the_latest_info_run(tmp_path: Path) -> None:
     assert cli._context_runs(tmp_path, "20261026T110000Z-rig-info", "info") == [
         "20261026T110000Z-rig-info"
     ]
+
+
+def test_config_menu_changes_settings_by_number(tmp_path: Path) -> None:
+    answers = iter(["1", "2", "2", "rack 7", "3", "http://hwb.example.com", "3", "-", "9", "q"])
+    said: list[str] = []
+    hwb_config.menu(ask=lambda _: next(answers), say=said.append)
+    assert json.loads((tmp_path / "hwb-config.json").read_text()) == {
+        "label": "rack 7",
+        "submit": "auto",
+    }
+    text = "\n".join(said)
+    assert "saved: submit = auto" in text and "anyone with a report's link" in text
+    assert "not saved:" in text and "https://" in text  # http gateway refused
+    assert "saved: gateway removed" in text and "pick 1-3 or q" in text
+
+
+def test_config_menu_enter_keeps_the_value(tmp_path: Path) -> None:
+    assert cli.main(["config", "set", "submit", "off"]) == 0
+    answers = iter(["1", "", "q"])
+    hwb_config.menu(ask=lambda _: next(answers), say=lambda _: None)
+    assert hwb_config.load().submit == "off"

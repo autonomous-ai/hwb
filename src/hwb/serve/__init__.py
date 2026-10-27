@@ -108,23 +108,44 @@ def find_vllm(explicit: str | None) -> str | None:
     return proc.which("vllm")
 
 
+def nvcc_major(nvcc: str) -> int | None:
+    """CUDA major version of an nvcc ("release 12.0, V12.0.140" -> 12), None if it won't say."""
+    res = proc.run([nvcc, "--version"], timeout=30)
+    m = re.search(r"release (\d+)\.", res.stdout) if res.ok else None
+    return int(m.group(1)) if m else None
+
+
 def venv_env(vllm: str, environ: dict[str, str] | None = None) -> dict[str, str]:
     """What activating vLLM's venv would give it: its bin on PATH (JIT builds call ninja from
     there), and CUDA_HOME at the venv's pip toolkit (nvidia/cu*/bin/nvcc) when the rig has no
-    CUDA toolkit, since DeepGEMM and FlashInfer don't look for that one on their own."""
+    CUDA toolkit, since DeepGEMM and FlashInfer don't look for that one on their own. A system
+    toolkit older than the pip one also loses: FlashInfer takes the CUDA version from the nvcc
+    on PATH, and Ubuntu's nvidia-cuda-toolkit (12.0) knows no Blackwell, so its JIT then finds
+    "No supported CUDA architectures". An explicit CUDA_HOME/CUDA_PATH is always kept."""
     environ = dict(os.environ) if environ is None else environ
     venv = Path(vllm).resolve().parent.parent
     env: dict[str, str] = {}
     if (venv / "pyvenv.cfg").exists():
         env["PATH"] = os.pathsep.join(p for p in (str(venv / "bin"), environ.get("PATH")) if p)
-    if environ.get("CUDA_HOME") or environ.get("CUDA_PATH") or proc.which("nvcc"):
-        return env
-    if Path("/usr/local/cuda/bin/nvcc").exists():
+    if environ.get("CUDA_HOME") or environ.get("CUDA_PATH"):
         return env
     found = sorted(venv.glob("lib/python3*/site-packages/nvidia/cu*/bin/nvcc"))
-    if found:
-        env["CUDA_HOME"] = str(found[-1].parent.parent)
-        complete_pip_toolkit(found[-1].parent.parent)
+    if not found:
+        return env
+    pip_major = (
+        int(m.group(1)) if (m := re.fullmatch(r"cu(\d+)", found[-1].parent.parent.name)) else 0
+    )
+    system = proc.which("nvcc") or (
+        "/usr/local/cuda/bin/nvcc" if Path("/usr/local/cuda/bin/nvcc").exists() else None
+    )
+    if system and (nvcc_major(system) or 0) >= pip_major:
+        return env
+    if system:
+        log.info(
+            "%s is older than CUDA %d: JIT kernels use the vLLM venv's toolkit", system, pip_major
+        )
+    env["CUDA_HOME"] = str(found[-1].parent.parent)
+    complete_pip_toolkit(found[-1].parent.parent)
     return env
 
 

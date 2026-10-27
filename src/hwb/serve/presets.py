@@ -125,9 +125,11 @@ PRESETS: tuple[Preset, ...] = (
         context=262144,
         vllm_extras=("b12x",),
         no_thinking={"thinking": False},
-        notes="Ran in production on this profile with a vLLM build other than VLLM_SPEC: with "
-              f"{VLLM_SPEC} on SM120 warmup fails in DeepGEMM's fp8 o_proj (layout.hpp t.dim() == N). "
-              "b12x = vLLM's SM120/SM121 kernels; DSpark speculative decoding.",
+        notes="Ran in production on this profile with --linear-backend b12x on another vLLM build. "
+              f"With {VLLM_SPEC} that flag leaves wo_a 2-D and DeepGEMM's fp8 o_proj einsum asserts "
+              "(layout.hpp t.dim() == N) at warmup, so it is left out: linear layers use DeepGEMM, "
+              "attention and MoE b12x (SM120/SM121 kernels). Started and passed the answer checks "
+              "on 2x RTX PRO 6000 (2026-10-27). DSpark speculative decoding.",
         args=(
             "--trust-remote-code",
             "--tensor-parallel-size",
@@ -178,8 +180,6 @@ PRESETS: tuple[Preset, ...] = (
             "B12X",
             "--moe-backend",
             "b12x",
-            "--linear-backend",
-            "b12x",
         ),
     ),
     Preset(
@@ -226,8 +226,6 @@ PRESETS: tuple[Preset, ...] = (
             "--attention-backend",
             "B12X",
             "--moe-backend",
-            "b12x",
-            "--linear-backend",
             "b12x",
         ),
     ),

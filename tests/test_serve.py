@@ -153,6 +153,8 @@ def test_deepseek_preset_is_the_production_command() -> None:
     cmd = p.command()
     assert cmd[cmd.index("--revision") + 1] == "6821d6ad3681a4b137b066b76094fa82ebd0a380"
     assert "--attention-backend" in cmd and "B12X" in cmd and p.vllm_extras == ("b12x",)
+    # vllm 0.32: b12x linear layers leave wo_a 2-D and DeepGEMM's o_proj einsum asserts
+    assert "--linear-backend" not in cmd
 
 
 def test_hardware_matching() -> None:
@@ -366,6 +368,26 @@ def test_venv_env_activates_the_venv_and_finds_its_pip_toolkit(
     ).resolve()
     (home / "bin" / "nvcc").unlink()
     assert serve.venv_env(str(vllm), env) == bin_path
+
+
+def test_an_older_system_nvcc_does_not_shadow_the_venv_toolkit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ubuntu's nvidia-cuda-toolkit (nvcc 12.0) made FlashInfer's JIT find no Blackwell arch."""
+    from hwb import serve
+    from hwb.core import proc
+
+    vllm = tmp_path / "venv" / "bin" / "vllm"
+    vllm.parent.mkdir(parents=True)
+    vllm.touch()
+    home = tmp_path / "venv" / "lib" / "python3.12" / "site-packages" / "nvidia" / "cu13"
+    (home / "bin").mkdir(parents=True)
+    (home / "bin" / "nvcc").touch()
+    monkeypatch.setattr(proc, "which", lambda name: "/usr/bin/nvcc")
+    monkeypatch.setattr(serve, "nvcc_major", lambda nvcc: 12)
+    assert serve.venv_env(str(vllm), {})["CUDA_HOME"] == str(home.resolve())
+    monkeypatch.setattr(serve, "nvcc_major", lambda nvcc: 13)
+    assert "CUDA_HOME" not in serve.venv_env(str(vllm), {})
 
 
 def test_instanttensor_is_dropped_where_it_cannot_load() -> None:

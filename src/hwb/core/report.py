@@ -13,6 +13,7 @@ from typing import Any, TextIO
 
 from .. import __version__
 from .context import RunContext
+from .platform import hand_back
 from .report_html import INDEX_HTML, write_index
 from .result import CheckResult, Status
 
@@ -85,6 +86,7 @@ def write_report(ctx: RunContext) -> Path:
     except (OSError, ValueError) as exc:
         # The viewer is a convenience; report.json and report.md above are the record.
         log.warning("%s not written: %s", INDEX_HTML, exc, exc_info=True)
+    hand_back(ctx.run_dir.parent)
     return path
 
 

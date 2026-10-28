@@ -1,3 +1,12 @@
+from __future__ import annotations
+
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+from hwb.core import platform
 from hwb.core.platform import ARCH, DEBIAN, OSInfo, parse_os_release
 from hwb.metrics.collect import parse_cpuinfo, parse_dmidecode_memory, parse_meminfo
 from hwb.nvsmi import parse_csv, parse_cuda_version
@@ -51,3 +60,45 @@ def test_gpu_serial_gets_its_own_key_and_na_is_none() -> None:
         {"index": "0", "gpu_serial": None},
         {"index": "1", "gpu_serial": "1652724012345"},
     ]
+
+
+def _hand_back_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, owner: int) -> list[Path]:
+    base = tmp_path / "hwb-runs"
+    (base / "run1").mkdir(parents=True)
+    (base / "run1" / "report.json").write_text("{}")
+    (base / "report.html").write_text("")
+    real_stat = Path.stat
+
+    def fake_stat(p: Path, **kw: Any) -> Any:
+        st = real_stat(p, **kw)
+        return SimpleNamespace(st_uid=owner if p == tmp_path else 0, st_mode=st.st_mode)
+
+    chowned: list[Path] = []
+    monkeypatch.setattr(platform.os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setattr(Path, "stat", fake_stat)
+    monkeypatch.setattr(platform.os, "chown", lambda p, u, g: chowned.append(Path(p)))
+    platform.hand_back(base, {"SUDO_UID": "1000", "SUDO_GID": "1000"})
+    return chowned
+
+
+def test_hand_back_gives_sudo_output_to_the_invoking_user(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    chowned = _hand_back_tree(tmp_path.resolve(), monkeypatch, owner=1000)
+    base = tmp_path.resolve() / "hwb-runs"
+    assert set(chowned) == {
+        base,
+        base / "run1",
+        base / "run1" / "report.json",
+        base / "report.html",
+    }
+
+
+def test_hand_back_leaves_output_in_root_only_places(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert _hand_back_tree(tmp_path.resolve(), monkeypatch, owner=0) == []
+
+
+def test_hand_back_needs_sudo() -> None:
+    platform.hand_back(Path("/nonexistent"), {})  # not root, no SUDO_UID: a no-op

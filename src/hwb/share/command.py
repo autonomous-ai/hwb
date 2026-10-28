@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from ..core.errors import HwbError, UserAbortError
+from ..core.platform import hand_back
 from ..core.report_html import collect_runs
 from . import client
 from .sanitize import describe_redactions, local_identity, sanitize_bundle
@@ -92,6 +93,7 @@ def submit_runs(
     if dry_run:
         path = out / PREVIEW
         path.write_text(json.dumps(bundle, indent=2, default=str) + "\n", encoding="utf-8")
+        hand_back(out)
         print(f"Dry run: the exact upload ({size} bytes) is in {path}. Nothing was sent.")
         return 0
 
@@ -100,6 +102,7 @@ def submit_runs(
     _confirm("Submit this report?", assume_yes)
     sub = client.submit(base, token, bundle)
     saved = client.record(out, base, sub, [r["id"] for r in runs])
+    hand_back(out)
     log.info("submitted report %s", sub.id)
 
     color = sys.stdout.isatty() and "NO_COLOR" not in os.environ

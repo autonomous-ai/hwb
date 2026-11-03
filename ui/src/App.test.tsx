@@ -291,6 +291,9 @@ describe("benchmarks", () => {
     expect(entityColor("gpu0.util", sensors)).not.toBe(entityColor("gpu1.util", sensors));
     expect(entityColor("cpu.temp.Package id 1", sensors)).not.toBe(entityColor("cpu.temp.Package id 0", sensors));
     expect(entityColor("mem.used", sensors)).not.toBe(entityColor("cpu.util", sensors));
+    const tests = ["load", "rag"];
+    expect(entityColor("llm.rag.ttft_ms", sensors, tests)).toBe(entityColor("llm.rag.out_tok_s", sensors, tests));
+    expect(entityColor("llm.load.out_tok_s", sensors, tests)).not.toBe(entityColor("llm.rag.out_tok_s", sensors, tests));
   });
 
   it("overview keeps benchmarks from separate runs", () => {
@@ -311,6 +314,21 @@ describe("benchmarks", () => {
   });
 });
 
+describe("chart time axis", () => {
+  it("switches to hours past an hour", async () => {
+    const { fmtTime } = await import("./components/Chart");
+    expect(fmtTime(75)).toBe("1:15");
+    expect(fmtTime(3599.6)).toBe("1:00:00"); // rounds before splitting: never 59:60
+    expect(fmtTime(57360)).toBe("15:56:00");
+  });
+
+  it("ticks long runs on whole hours", async () => {
+    const { timeStep } = await import("./components/Chart");
+    expect(timeStep(57360, 4)).toBe(4 * 3600);
+    expect(timeStep(600, 4) % 3600).not.toBe(0);
+  });
+});
+
 describe("chart scales", () => {
   it("never zooms into sensor noise", async () => {
     const { yScale } = await import("./components/Chart");
@@ -321,6 +339,8 @@ describe("chart scales", () => {
     expect(yScale([0, 3], "%")).toMatchObject({ lo: 0, hi: 100 });
     const w = yScale([2.0, 3.0], "W");
     expect(w.lo).toBe(0); // small non-negative values start at zero
+    expect(yScale([350.2, 352.0], "tok/s").lo).toBe(0); // LLM drift is read against zero
+    expect(yScale([494, 2287], "ms").lo).toBe(0);
   });
 });
 

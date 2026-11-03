@@ -50,13 +50,19 @@ const CHARTS: { title: string; match: (k: string) => boolean; limit?: boolean }[
   { title: "GPU SM clock", match: (k) => /^gpu\d+\.sm_mhz$/.test(k) },
   { title: "GPU PCIe link generation", match: (k) => /^gpu\d+\.pcie_gen$/.test(k) },
   { title: "PCIe correctable errors (since start)", match: (k) => /^gpu\d+\.pcie_errors$/.test(k) },
+  // LLM results per load phase or round (llm.<test>.<metric>), one line per load test.
+  { title: "LLM output throughput", match: (k) => /^llm\.\w+\.out_tok_s$/.test(k) },
+  { title: "LLM time to first token (p50)", match: (k) => /^llm\.\w+\.ttft_ms$/.test(k) },
+  { title: "LLM time per output token (p50)", match: (k) => /^llm\.\w+\.tpot_ms$/.test(k) },
 ];
 
 /** Colour follows the entity: CPU (and its first sensor) slot 1, further sockets the next
  * slots, memory slot 7; GPU n slot n+1. Stable across every chart of the page. */
-export function entityColor(key: string, cpuSensors: string[]): string {
+export function entityColor(key: string, cpuSensors: string[], llmTests: string[] = []): string {
   const gpu = key.match(/^gpu(\d+)\./);
   if (gpu) return SLOTS[Number(gpu[1]) % SLOTS.length]!;
+  const llm = key.match(/^llm\.(\w+)\./);
+  if (llm) return SLOTS[Math.max(0, llmTests.indexOf(llm[1]!)) % SLOTS.length]!;
   if (key === "mem.used") return SLOTS[6]!;
   if (key.startsWith("cpu.temp.")) return SLOTS[Math.max(0, cpuSensors.indexOf(key)) % 6]!;
   return SLOTS[0]!;
@@ -409,6 +415,8 @@ function download(name: string, text: string) {
 export function Charts({ ts }: { ts: Timeseries }) {
   if (!ts.t?.length || !ts.series?.length) return <p className="muted">No samples were recorded.</p>;
   const cpuSensors = ts.series.filter((s) => s.key.startsWith("cpu.temp.")).map((s) => s.key);
+  // Colour follows the load test (sweep, rag, ...) across the three LLM charts.
+  const llmTests = [...new Set(ts.series.map((s) => s.key.match(/^llm\.(\w+)\./)?.[1]).filter((k): k is string => !!k))];
   const crit = num(ts.cpu_crit_c);
   return (
     <div className="charts">
@@ -419,7 +427,7 @@ export function Charts({ ts }: { ts: Timeseries }) {
           key: s.key,
           label: shortLabel(s),
           values: s.values,
-          color: entityColor(s.key, cpuSensors),
+          color: entityColor(s.key, cpuSensors, llmTests),
         }));
         return (
           <LineChart

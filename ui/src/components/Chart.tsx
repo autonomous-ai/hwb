@@ -30,13 +30,18 @@ const NARROW = 480;
 const M_NARROW = { ...MARGIN, left: 40, right: 12 };
 // Smallest y span per unit, so sensor noise (95.2 vs 95.4 °C) never fills the whole height.
 const MIN_SPAN: Record<string, number> = { "°C": 20, MHz: 500, W: 50, "": 4, errors: 5 };
-// Discrete states (link generation, cumulative counters) are drawn as steps, not slopes.
-const STEPPED = new Set(["gen", "errors"]);
+// Discrete states (link generation, cumulative counters, per-round LLM results) are drawn as steps, not slopes.
+const STEPPED = new Set(["gen", "errors", "tok/s", "ms"]);
+// LLM throughput and latency start at zero, so a 1% drift over hours looks like the 1% it is.
+const ZERO_BASED = new Set(["tok/s", "ms"]);
 const FALLBACK_WIDTH = 720;
 
 export function fmtTime(s: number): string {
-  const m = Math.floor(s / 60);
-  return `${m}:${String(Math.round(s % 60)).padStart(2, "0")}`;
+  const sec = Math.round(s);
+  const m = Math.floor(sec / 60);
+  // Past an hour: h:mm:ss, so a 16 h run reads 15:56:00 rather than 956:00.
+  if (m >= 60) return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}:${String(sec % 60).padStart(2, "0")}`;
+  return `${m}:${String(sec % 60).padStart(2, "0")}`;
 }
 
 function niceStep(span: number, target: number): number {
@@ -44,6 +49,13 @@ function niceStep(span: number, target: number): number {
   const pow = 10 ** Math.floor(Math.log10(raw || 1));
   const n = raw / pow;
   return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * pow;
+}
+
+/** Time-axis tick step: nice seconds for short runs, whole hours (1, 2, 3, 4, 6, 12) past two hours. */
+export function timeStep(span: number, target: number): number {
+  if (span <= 7200) return niceStep(span, target);
+  const hours = span / Math.max(target, 1) / 3600;
+  return ([1, 2, 3, 4, 6, 12].find((h) => h >= hours) ?? Math.ceil(hours / 12) * 12) * 3600;
 }
 
 /** Nice y domain and ticks; percentages are pinned to 0-100. */
@@ -64,6 +76,7 @@ export function yScale(values: number[], unit: string, extra: number[] = []): { 
     if (lo < 0 && Math.min(...all) >= 0) [lo, hi] = [0, hi - lo];
   }
   if (lo === hi) [lo, hi] = [lo - 1, hi + 1];
+  if (ZERO_BASED.has(unit) && lo >= 0) lo = 0;
   if (lo >= 0 && lo < (hi - lo) * 0.5) lo = 0; // start at zero when it costs little
   const step = niceStep(hi - lo, 4);
   lo = Math.floor(lo / step) * step;
@@ -139,7 +152,7 @@ export function LineChart({
   const showLimit = limit && values.length && limit.value <= Math.max(...values) * 1.6 ? limit : null;
   const { lo, hi, ticks } = yScale(values, unit, showLimit ? [showLimit.value] : []);
   const y = (v: number) => M.top + plotH - ((v - lo) / (hi - lo || 1)) * plotH;
-  const xStep = niceStep(t1 - t0, Math.max(2, Math.floor(plotW / 90)));
+  const xStep = timeStep(t1 - t0, Math.max(2, Math.floor(plotW / 90)));
   const xTicks: number[] = [];
   for (let s = 0; t0 + s <= t1; s += xStep) xTicks.push(t0 + s); // elapsed time: 0:00, 0:20, ...
 

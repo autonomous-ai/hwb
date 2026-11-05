@@ -33,7 +33,7 @@ const MIN_SPAN: Record<string, number> = { "°C": 20, MHz: 500, W: 50, "": 4, er
 // Discrete states (link generation, cumulative counters, per-round LLM results) are drawn as steps, not slopes.
 const STEPPED = new Set(["gen", "errors", "tok/s", "ms"]);
 // LLM throughput and latency start at zero, so a 1% drift over hours looks like the 1% it is.
-const ZERO_BASED = new Set(["tok/s", "ms"]);
+const ZERO_BASED = new Set(["tok/s", "ms", "RPM"]); // a stopped fan sits on the axis
 const FALLBACK_WIDTH = 720;
 
 export function fmtTime(s: number): string {

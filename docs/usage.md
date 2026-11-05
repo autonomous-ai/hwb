@@ -112,6 +112,7 @@ While a benchmark runs, a sampler records a time series every `--interval` secon
 - **CPU:** utilisation, average clock, package temperatures (hwmon `coretemp`/`k10temp`), package power (RAPL, needs root) and the kernel's thermal-throttle counters.
 - **System:** memory use and load average.
 - **GPUs:** temperature, utilisation, power, SM clock and throttle reasons, from `nvidia-smi -lms`.
+- **Fans:** every fan tachometer the kernel exposes (hwmon `fan*_input`, RPM; headers that read 0 for the whole run are left out), and for each GPU fan its duty % and RPM from NVML (the driver's `libnvidia-ml`). Fans a board only reports through its BMC (IPMI) are not read; passive GPUs have no fans to report.
 
 Every sample goes to `bench-<kind>.csv` and `bench-<kind>-gpu.csv` in the run directory. The report keeps up to 300 points per series (temperatures keep their peaks). The viewer's **Benchmarks** tab draws them as charts, with each phase shaded.
 
@@ -122,6 +123,10 @@ Every sample goes to `bench-<kind>.csv` and `bench-<kind>-gpu.csv` in the run di
 | `memory`, `disk`, `gpu` | not implemented yet (SKIP) | planned: stress-ng/sysbench per NUMA node; fio on a *file* in `--path`, never raw devices; GEMM/bandwidth/P2P/NCCL in an isolated uv venv |
 
 Load comes from `stress-ng --cpu-method matrixprod` when it is installed (`hwb install tools`). Without it, a stdlib fallback runs one busy Python process per thread: the results are still valid for temperatures and stability, but the scores only compare with other fallback runs. All load processes run in their own process group and are always stopped, including on Ctrl-C. `thermal` monitors GPUs but doesn't load them; GPU load comes with `bench gpu`.
+
+**Fans** are judged in every benchmark, `monitor` and `serve` (check `serve.fans`):
+- **WARN** when a GPU fan driven at ≥ 20% reads 0 RPM in 3 or more samples: a dead fan, or a broken tach sensor that hides a fan failure from the driver. Fans below 20% may stop on purpose (zero-RPM idle).
+- **WARN** when a board or chassis fan stops during the run after spinning.
 
 **GPU PCIe links** are recorded too, for each GPU the host driver owns:
 - **Link state:** the generation and width the kernel negotiated (`current_link_speed`/`width` in sysfs, with `nvidia-smi` as a fallback).

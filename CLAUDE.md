@@ -87,7 +87,7 @@ Output goes to `hwb-runs/<UTC-timestamp>-<host>-<command>/{report.json,report.md
 - [x] `info` (default) driver checks: PCI scan, nouveau, kernel module, binding, Secure Boot, headers, nvidia-smi, Blackwell, PCIe width + generation cap, persistence, libcuda, nvcc, Xid
 - [x] `info` inventory: system, board, CPU, memory/DIMMs, NUMA, disks, NICs, hwmon temps, GPUs
 - [x] `install driver|cuda|tools`: dry-run plans + guarded apply
-- [x] `metrics/sampler.py`: background time series (procfs/hwmon/RAPL + nvidia-smi `-lms`) to CSV and the report
+- [x] `metrics/sampler.py`: background time series (procfs/hwmon/RAPL, NVML fans via ctypes in `metrics/fans.py` + nvidia-smi `-lms`) to CSV and the report
 - [x] `bench cpu` (stress-ng or stdlib fallback) and `bench thermal`: phases, time series, charts in the viewer; `bench memory|disk` via stress-ng / sysbench / fio still open
 - [ ] `bench gpu`: torch payload in a uv venv: GEMM TFLOPS per dtype, memory bandwidth, H2D/D2H, P2P, NCCL all-reduce
 - [x] `serve`: presets per hardware, uv venv with vllm (`--install-vllm`), health wait, answer checks + load sweep, guaranteed teardown; `--endpoint` for running servers. Mark presets verified after a real run

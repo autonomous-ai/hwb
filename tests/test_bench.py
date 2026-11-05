@@ -12,6 +12,7 @@ import pytest
 from hwb.bench import analysis, load
 from hwb.bench.options import scaled
 from hwb.core import proc
+from hwb.metrics import fans
 from hwb.metrics import sampler as sm
 from hwb.metrics.sampler import Timeseries
 
@@ -156,6 +157,82 @@ def test_sampler_records_phases_and_csv(tmp_path: Path) -> None:
     assert set(ts.values("cpu.temp.Package id 0")) == {55.0}
     header = (tmp_path / "t.csv").read_text().splitlines()[0]
     assert header.startswith("t_s,phase,cpu_util_pct") and "temp_c[Package id 0]" in header
+
+
+def test_hwmon_fans_labelled_and_unconnected_headers_dropped(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    _put(root, "proc/stat", "cpu  100 0 100 800 0 0 0 0\n")
+    _put(root, "sys/class/hwmon/hwmon0/name", "nct6798")
+    _put(root, "sys/class/hwmon/hwmon0/fan1_input", "1450")
+    _put(root, "sys/class/hwmon/hwmon0/fan2_input", "0")  # nothing plugged in
+    _put(root, "sys/class/hwmon/hwmon0/fan10_input", "900")
+    _put(root, "sys/class/hwmon/hwmon1/name", "dell_smm")
+    _put(root, "sys/class/hwmon/hwmon1/fan1_label", "CPU Fan")
+    _put(root, "sys/class/hwmon/hwmon1/fan1_input", "2100")
+    _put(root, "sys/class/hwmon/hwmon2/name", "nct6798")
+    _put(root, "sys/class/hwmon/hwmon2/fan1_input", "700")
+    labels = [f.label for f in fans.find_hwmon_fans(root)]
+    assert labels == [
+        "nct6798 fan1",
+        "nct6798 fan2",
+        "nct6798 fan10",
+        "dell_smm CPU Fan",
+        "nct6798 #1 fan1",
+    ]
+    with sm.Sampler(tmp_path, name="t", interval=0.05, gpus=False, root=root) as s:
+        s.phase("load")
+        time.sleep(0.15)
+    ts = s.result
+    assert set(ts.values("fan.nct6798 fan1")) == {1450.0} and "fan.nct6798 fan2" not in ts.series
+    assert ts.series["fan.dell_smm CPU Fan"]["group"] == "fan"
+    assert "fan_rpm[dell_smm CPU Fan]" in (tmp_path / "t.csv").read_text().splitlines()[0]
+    assert {x["unit"] for x in ts.to_report()["series"] if x["key"].startswith("fan.")} == {"RPM"}
+
+
+def test_no_nvml_means_no_gpu_fans() -> None:
+    if sys.platform == "darwin":
+        assert fans.NvmlFans.open() is None
+
+
+def test_gpu_fan_samples_become_rpm_and_duty_series(tmp_path: Path) -> None:
+    class Fake:
+        def sample(self) -> dict[str, list[tuple[float | None, float | None]]]:
+            return {"0": [(30.0, 0.0), (30.0, 1500.0)], "1": [(None, None)]}
+
+        def close(self) -> None:
+            pass
+
+    root = tmp_path / "root"
+    _put(root, "proc/stat", "cpu  100 0 100 800 0 0 0 0\n")
+    s = sm.Sampler(tmp_path, name="t", interval=0.05, gpus=False, root=root)
+    s._nvml = Fake()  # type: ignore[assignment]
+    with s:
+        s.phase("load")
+        time.sleep(0.15)
+    ts = s.result
+    assert set(ts.values("gpu0.fan0.rpm")) == {0.0} and set(ts.values("gpu0.fan1.rpm")) == {1500.0}
+    assert (
+        set(ts.values("gpu0.fan0.pct")) == {30.0}
+        and ts.series["gpu0.fan0.pct"]["group"] == "fan_duty"
+    )
+    assert "gpu1.fan0.rpm" not in {x["key"] for x in ts.to_report()["series"]}  # never reported
+    assert "gpu0_fan0_pct,gpu0_fan0_rpm" in (tmp_path / "t.csv").read_text().splitlines()[0]
+    (f,) = analysis.fan_findings(ts)
+    assert f.level == "warn" and f.text.startswith(
+        "GPU0 fan 0 reads 0 RPM while driven at up to 30%"
+    )
+
+
+def test_fan_findings() -> None:
+    ts = Timeseries(1.0, t=[float(i) for i in range(10)])
+    ts.add("gpu0.fan0.pct", "", "fan_duty")[:] = [10.0] * 10  # idle zero-RPM mode is fine
+    ts.add("gpu0.fan0.rpm", "", "fan")[:] = [0.0] * 10
+    ts.add("gpu1.fan0.pct", "", "fan_duty")[:] = [40.0] * 10
+    ts.add("gpu1.fan0.rpm", "", "fan")[:] = [0.0, 0.0] + [2000.0] * 8  # spin-up, not a stall
+    ts.add("fan.nct fan1", "nct fan1", "fan")[:] = [1200.0] * 5 + [0.0] * 5
+    ts.add("fan.nct fan3", "nct fan3", "fan")[:] = [0.0] * 3 + [800.0] * 7
+    (f,) = analysis.fan_findings(ts)
+    assert f.text == "fan nct fan1 stopped during the run (0 RPM after spinning)"
 
 
 # ---------------------------------------------------------------- load + processes

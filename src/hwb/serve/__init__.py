@@ -453,6 +453,19 @@ def _test(
                 hint=found[0].hint if found else None,
             )
         )  # fmt: skip
+    gpu_fans = [k for k in s.result.series if k.startswith("gpu") and k.endswith(".rpm")]
+    if sample and gpu_fans:
+        fans = analysis.fan_findings(s.result)
+        section["findings"] = section.get("findings", []) + [vars(f) for f in fans]
+        ctx.add(
+            CheckResult(
+                "serve.fans",
+                Status.WARN if fans else Status.PASS,
+                "; ".join(f.text for f in fans) if fans
+                else f"no GPU fan stalled while serving ({len(gpu_fans)} fans watched)",
+                hint=fans[0].hint if fans else None,
+            )
+        )  # fmt: skip
 
 
 def _run_endpoint(

@@ -294,6 +294,10 @@ describe("benchmarks", () => {
     const tests = ["load", "rag"];
     expect(entityColor("llm.rag.ttft_ms", sensors, tests)).toBe(entityColor("llm.rag.out_tok_s", sensors, tests));
     expect(entityColor("llm.load.out_tok_s", sensors, tests)).not.toBe(entityColor("llm.rag.out_tok_s", sensors, tests));
+    const fans = ["gpu0.fan0", "gpu0.fan1", "fan.nct fan1"];
+    expect(entityColor("gpu0.fan1.rpm", sensors, [], fans)).toBe(entityColor("gpu0.fan1.pct", sensors, [], fans));
+    expect(entityColor("gpu0.fan0.rpm", sensors, [], fans)).not.toBe(entityColor("gpu0.fan1.rpm", sensors, [], fans));
+    expect(entityColor("fan.nct fan1", sensors, [], fans)).not.toBe(entityColor("gpu0.fan0.rpm", sensors, [], fans));
   });
 
   it("overview keeps benchmarks from separate runs", () => {

@@ -3,6 +3,7 @@ with synthetic data; thresholds are named constants here."""
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -15,6 +16,8 @@ CLOCK_SAG_WARN_PCT = 10.0  # clocks lost between the start and end of sustained 
 STILL_RISING_C_PER_MIN = 1.0  # temperature still climbing at the end of the load phase
 EDGE_FRACTION = 0.2  # "start"/"end" of a phase = its first/last 20 %
 GPU_BUSY_PCT = 50.0  # a GPU this busy keeps its link at full speed; idle ones drop it on purpose
+FAN_DRIVEN_PCT = 20.0  # a GPU fan commanded at least this fast must be turning
+FAN_STALL_MIN_SAMPLES = 3  # 0 RPM in fewer driven samples is a tach glitch, not a dead fan
 
 
 def clean(values: list[float | None]) -> list[float]:
@@ -168,6 +171,7 @@ def thermal_findings(
                 )
             )
     findings += pcie_findings(ts)
+    findings += fan_findings(ts)
     facts["pcie"] = ts.meta.get("pcie") or None
     return findings, facts
 
@@ -247,6 +251,50 @@ def pcie_findings(ts: Timeseries) -> list[Finding]:
                     "warn",
                     f"GPU{gpu} retransmitted {m['replays']} PCIe packets (replays)",
                     PCIE_HINT,
+                )
+            )
+    return findings
+
+
+FAN_HINT = (
+    "look at the fan while the card is loaded: if it does not turn, replace the fan or RMA the "
+    "card before it overheats; if it turns, the tach sensor or its cable is faulty and the "
+    "driver cannot see that fan fail"
+)
+
+
+def fan_findings(ts: Timeseries) -> list[Finding]:
+    """GPU fans driven but reading 0 RPM; board/chassis fans that stopped during the run."""
+    findings: list[Finding] = []
+    for key in ts.series:
+        m = re.fullmatch(r"gpu(\d+)\.fan(\d+)\.rpm", key)
+        if not m:
+            continue
+        rpm, duty = ts.values(key), ts.values(key[: -len("rpm")] + "pct")
+        driven = [i for i, d in enumerate(duty) if d is not None and d >= FAN_DRIVEN_PCT]
+        stalled = [i for i in driven if i < len(rpm) and rpm[i] == 0]
+        if len(stalled) >= FAN_STALL_MIN_SAMPLES:
+            at = max(d for i in stalled if (d := duty[i]) is not None)
+            findings.append(
+                Finding(
+                    "warn",
+                    f"GPU{m[1]} fan {m[2]} reads 0 RPM while driven at up to {at:.0f}%, "
+                    f"in {len(stalled)} of {len(driven)} samples",
+                    FAN_HINT,
+                )
+            )
+    for key, s in ts.series.items():
+        if not key.startswith("fan."):
+            continue
+        vals = ts.values(key)
+        first = next((i for i, v in enumerate(vals) if v), None)
+        if first is not None and vals[first:].count(0) >= FAN_STALL_MIN_SAMPLES:
+            findings.append(
+                Finding(
+                    "warn",
+                    f"fan {s['label']} stopped during the run (0 RPM after spinning)",
+                    "check the fan and its header; if the BIOS/BMC stops fans at low "
+                    "temperature, this is its fan curve",
                 )
             )
     return findings

@@ -50,6 +50,9 @@ const CHARTS: { title: string; match: (k: string) => boolean; limit?: boolean }[
   { title: "GPU SM clock", match: (k) => /^gpu\d+\.sm_mhz$/.test(k) },
   { title: "GPU PCIe link generation", match: (k) => /^gpu\d+\.pcie_gen$/.test(k) },
   { title: "PCIe correctable errors (since start)", match: (k) => /^gpu\d+\.pcie_errors$/.test(k) },
+  { title: "GPU fan speed", match: (k) => /^gpu\d+\.fan\d+\.rpm$/.test(k) },
+  { title: "GPU fan duty", match: (k) => /^gpu\d+\.fan\d+\.pct$/.test(k) },
+  { title: "System fans", match: (k) => k.startsWith("fan.") },
   // LLM results per load phase or round (llm.<test>.<metric>), one line per load test.
   { title: "LLM output throughput", match: (k) => /^llm\.\w+\.out_tok_s$/.test(k) },
   { title: "LLM time to first token (p50)", match: (k) => /^llm\.\w+\.ttft_ms$/.test(k) },
@@ -57,8 +60,11 @@ const CHARTS: { title: string; match: (k: string) => boolean; limit?: boolean }[
 ];
 
 /** Colour follows the entity: CPU (and its first sensor) slot 1, further sockets the next
- * slots, memory slot 7; GPU n slot n+1. Stable across every chart of the page. */
-export function entityColor(key: string, cpuSensors: string[], llmTests: string[] = []): string {
+ * slots, memory slot 7; GPU n slot n+1; each fan its own slot in the order fans are listed
+ * (a GPU has several), the same in its RPM and duty charts. Stable across the page. */
+export function entityColor(key: string, cpuSensors: string[], llmTests: string[] = [], fans: string[] = []): string {
+  const fan = fanEntity(key);
+  if (fan) return SLOTS[Math.max(0, fans.indexOf(fan)) % SLOTS.length]!;
   const gpu = key.match(/^gpu(\d+)\./);
   if (gpu) return SLOTS[Number(gpu[1]) % SLOTS.length]!;
   const llm = key.match(/^llm\.(\w+)\./);
@@ -68,7 +74,14 @@ export function entityColor(key: string, cpuSensors: string[], llmTests: string[
   return SLOTS[0]!;
 }
 
+/** "gpu0.fan1" for both of that fan's series, the key itself for a system fan. */
+export function fanEntity(key: string): string | null {
+  return key.match(/^(gpu\d+\.fan\d+)\.(rpm|pct)$/)?.[1] ?? (key.startsWith("fan.") ? key : null);
+}
+
 function shortLabel(s: Series): string {
+  const fan = s.key.match(/^gpu(\d+)\.fan(\d+)\./);
+  if (fan) return `GPU${fan[1]} fan ${fan[2]}`;
   const gpu = s.key.match(/^gpu(\d+)\./);
   if (gpu) return `GPU${gpu[1]}`;
   if (s.key.startsWith("cpu.temp.")) return s.key.slice("cpu.temp.".length);
@@ -417,6 +430,7 @@ export function Charts({ ts }: { ts: Timeseries }) {
   const cpuSensors = ts.series.filter((s) => s.key.startsWith("cpu.temp.")).map((s) => s.key);
   // Colour follows the load test (sweep, rag, ...) across the three LLM charts.
   const llmTests = [...new Set(ts.series.map((s) => s.key.match(/^llm\.(\w+)\./)?.[1]).filter((k): k is string => !!k))];
+  const fans = [...new Set(ts.series.map((s) => fanEntity(s.key)).filter((k): k is string => !!k))];
   const crit = num(ts.cpu_crit_c);
   return (
     <div className="charts">
@@ -427,7 +441,7 @@ export function Charts({ ts }: { ts: Timeseries }) {
           key: s.key,
           label: shortLabel(s),
           values: s.values,
-          color: entityColor(s.key, cpuSensors, llmTests),
+          color: entityColor(s.key, cpuSensors, llmTests, fans),
         }));
         return (
           <LineChart

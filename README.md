@@ -78,7 +78,7 @@ Interactive runs offer to submit at the end; `hwb config` (a menu) or `hwb confi
 | `info` (default): driver checks | ✅ nouveau, kernel module, PCI binding, Secure Boot, headers, nvidia-smi, Blackwell, PCIe width and generation, persistence, libcuda, CUDA toolkit, Xid |
 | `info` (default): inventory | ✅ system, board, CPU, memory/DIMMs, NUMA, disks, NICs, temperatures, GPUs |
 | `install driver\|cuda\|tools` | ✅ dry-run plans, guarded `--apply` |
-| `bench cpu`, `bench thermal` | ✅ load (stress-ng or built-in fallback) with a time series of CPU and GPU temperature, utilisation, clocks and power; charts in the report |
+| `bench cpu`, `bench thermal` | ✅ load (stress-ng or built-in fallback) with a time series of CPU and GPU temperature, utilisation, clocks, power and fan speeds; charts in the report |
 | `monitor` | ✅ the same time series and judgements as the benchmarks, recorded while the machine runs its own workload; includes GPU PCIe links (generation while busy, width, error counters, replays) |
 | `bench memory\|disk\|gpu` | 🚧 reports SKIP "not implemented yet" |
 | `serve` | ✅ vLLM presets per hardware (2× RTX PRO 6000 Blackwell: DeepSeek V4 Flash, Qwen 3.5/3.6/3.8, GLM 4.5 Air/4.7 Flash), or `--endpoint` for a running server; answer checks + load test (tokens/s, time to first token, time per token) with GPU sampling |

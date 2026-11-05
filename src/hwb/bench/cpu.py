@@ -97,7 +97,7 @@ def run(ctx: RunContext, opts: BenchOptions) -> None:
         hint = "the CPU cut clocks to cool down; run hwb bench thermal and check cooling"
     elif multi.method != load.STRESS_NG:
         hint = "install stress-ng (hwb install tools) for scores comparable across rigs"
-    pcie = analysis.pcie_findings(ts)
+    pcie = analysis.pcie_findings(ts) + analysis.fan_findings(ts)
     ctx.sections["bench"]["cpu"]["findings"] = [vars(f) for f in pcie]
     if pcie:
         level = analysis.verdict(pcie)

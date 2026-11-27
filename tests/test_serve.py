@@ -227,7 +227,7 @@ def test_docker_command_nvidia(tmp_path: Path) -> None:
     argv = container.docker_command(
         p, p.container, name="hwb-serve-x", port=8001, vendor="nvidia",
         mounts=_mounts(tmp_path), gpus=["1"], env={"HF_HUB_OFFLINE": "1", "CUDA_VISIBLE_DEVICES": "1"},
-        user=(1000, 1000), environ={"HF_TOKEN": "secret"},
+        user=(1000, 1000), environ={"HF_TOKEN": "secret", "NVIDIA_DISABLE_REQUIRE": "1"},
     )  # fmt: skip
     assert argv[:5] == ["docker", "run", "--rm", "--name", "hwb-serve-x"]
     assert argv[argv.index("-p") + 1] == "127.0.0.1:8001:8000"
@@ -236,6 +236,7 @@ def test_docker_command_nvidia(tmp_path: Path) -> None:
     assert f"{tmp_path / 'hub'}:{container.HUB}" in argv and "HF_HUB_OFFLINE=1" in argv
     assert "secret" not in " ".join(argv) and "HF_TOKEN" in argv  # by name only
     assert not any(a.startswith("CUDA_VISIBLE_DEVICES") for a in argv)  # --gpus does that
+    assert "NVIDIA_DISABLE_REQUIRE=1" in argv  # the operator's override reaches the toolkit
     tail = argv[argv.index(p.container.image) + 1 :]
     assert tail[:3] == [p.model, "--revision", p.revision]
     assert tail[tail.index("--port") + 1] == "8000" and tail[tail.index("--host") + 1] == "0.0.0.0"  # noqa: S104
@@ -569,6 +570,18 @@ def test_a_check_retries_with_room_to_reason(monkeypatch: pytest.MonkeyPatch) ->
     (first, *_) = suite.run_checks("http://x", "m", no_thinking={}, tools=False)
     assert budgets[:2] == [32, 32 + suite.REASONING_BUDGET]
     assert first["status"] == "pass" and "after reasoning" in first["detail"]
+
+
+def test_old_driver_for_the_image_gets_a_hint(tmp_path: Path) -> None:
+    from hwb import serve
+
+    log = tmp_path / "vllm.log"
+    log.write_text(
+        "docker: Error response from daemon: failed to create task for container: ...\n"
+        "nvidia-container-cli: requirement error: unsatisfied condition: cuda>=13.2, please "
+        "update your driver to a newer version, or use an earlier cuda container\n"
+    )
+    assert "NVIDIA_DISABLE_REQUIRE=1" in serve._tail(log)
 
 
 def test_failure_causes_skip_the_wrapping_tracebacks() -> None:

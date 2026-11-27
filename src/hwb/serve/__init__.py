@@ -49,7 +49,7 @@ LOG_TAIL = 3000
 INSTANTTENSOR_MEMLOCK = 1 << 30
 INSTANTTENSOR_HELD_MIB = 512
 # A worker's own exception or a compiler error, not the "see root cause above" wrappers.
-_CAUSE = re.compile(r"\b(?:\w+(?:Error|Exception)|fatal error): .+")
+_CAUSE = re.compile(r"\b(?:\w+(?:Error|Exception)|fatal error|requirement error): .+")
 _WRAPPERS = ("WorkerProc initialization failed", "Engine core initialization failed")
 _CAUSE_HINTS = (
     ("Python.h", "Triton compiles a helper at first start and needs the Python headers of the "
@@ -59,6 +59,9 @@ _CAUSE_HINTS = (
                    "run vllm download-kernels from the vLLM venv"),
     ("home_path", "DeepGEMM's JIT found no CUDA toolkit: set CUDA_HOME to one (the vLLM venv "
                   "has one from pip under site-packages/nvidia/cu*), or install nvcc"),
+    ("unsatisfied condition: cuda", "the image asks for a newer CUDA than the driver reports. "
+     "Within one CUDA major it usually runs anyway (minor-version compatibility): retry with "
+     "NVIDIA_DISABLE_REQUIRE=1 hwb serve ...; otherwise update the driver"),
 )  # fmt: skip
 _LOCAL = {"localhost", "127.0.0.1", "::1"}
 

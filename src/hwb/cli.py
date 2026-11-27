@@ -136,6 +136,15 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=f"install {serve.presets.VLLM_SPEC} into an isolated uv venv under $HWB_HOME",
     )
+    s.add_argument(
+        "--docker",
+        action="store_true",
+        help="run the server in a container: the preset's own image, else "
+        f"{serve.presets.DEFAULT_IMAGE} (presets with an image always use docker)",
+    )
+    s.add_argument(
+        "--image", metavar="IMAGE", help="run the server in this docker image (implies --docker)"
+    )
     s.add_argument("--dry-run", action="store_true", help="print the vllm command and stop")
     s.add_argument("--force", action="store_true", help="run a preset meant for other hardware")
 
@@ -250,6 +259,8 @@ def _serve_options(args: argparse.Namespace) -> serve.ServeOptions:
         dry_run=args.dry_run,
         force=args.force,
         profiles=serve.suite.parse_profiles(args.profiles),
+        docker=args.docker or bool(args.image),
+        image=args.image,
     )
 
 
@@ -261,13 +272,16 @@ def _serve_list() -> int:
     hw = serve.presets.matching_hardware(serve.detected_gpus())
     found = serve.weights.find_all()
     print(f"This machine: {hw.label if hw else 'no preset hardware profile matches'}\n")
-    print(f"{'preset':<28} {'fits':<5} {'on disk':<8} {'status':<9} {'weights':>8}  model")
+    print(
+        f"{'preset':<28} {'fits':<5} {'on disk':<8} {'status':<9} {'runs in':<7} {'weights':>8}  model"
+    )
     for p in serve.presets.PRESETS:
-        fits = "yes" if hw and p.hardware == hw.id else "-"
+        fits = "yes" if serve.presets.covers(hw, serve.presets.HARDWARE[p.hardware]) else "-"
         cached = "yes" if serve.weights.find(found, p.model, p.revision) else "-"
-        star = " (default)" if p.default else ""
+        star = " (default)" if p.default and hw and p.hardware == hw.id else ""
+        where = "docker" if p.container else "vllm"
         print(
-            f"{p.name:<28} {fits:<5} {cached:<8} {p.status:<9} {p.weights_gb:>6.0f}GB  {p.model}{star}"
+            f"{p.name:<28} {fits:<5} {cached:<8} {p.status:<9} {where:<7} {p.weights_gb:>6.0f}GB  {p.model}{star}"
         )
     print(f"\nModel weights on this machine ({len(found)}):")
     for w in found:
@@ -292,7 +306,10 @@ def _serve_list() -> int:
     print(
         f"\nNew downloads go to the shared Hugging Face cache: {serve.weights.default_hub()} (set HF_HOME to move it)"
     )
-    print("hwb serve --preset NAME [--dry-run] | --model ID-OR-PATH | --endpoint http://host:8000")
+    print(
+        "hwb serve --preset NAME [--dry-run] [--docker | --image IMAGE] | --model ID-OR-PATH "
+        "| --endpoint http://host:8000"
+    )
     return 0
 
 

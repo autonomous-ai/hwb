@@ -5,6 +5,11 @@ how sure we are. "verified" means the command ran on that hardware; "untested" m
 derived from the model card, the weight size and vLLM's source, and still needs a real run.
 Model ids, revisions and flags drift: keep them here, nowhere else (like install/plan.py).
 
+A preset may carry a container template (image + how to run it): `hwb serve` then starts the
+server with docker instead of a local vLLM, which is the quick way to run builds that are not on
+PyPI (model-specific vLLM images, ROCm forks). `--docker` runs any other preset in the stock
+vLLM image (DEFAULT_IMAGE).
+
 Sizing rule for a profile: weights + KV cache + CUDA graphs must fit the GPUs' memory; on
 2x RTX PRO 6000 (2 x 96 GB) the verified DeepSeek run carries 168 GB of weights, which is
 about the ceiling.
@@ -18,6 +23,8 @@ from typing import Any
 
 VLLM_SPEC = "vllm==0.32.0"  # what the presets were checked against (vLLM main, 2026-10)
 
+DEFAULT_IMAGE = "vllm/vllm-openai:v" + VLLM_SPEC.split("==")[1]  # --docker for a plain preset
+
 VERIFIED = "verified"
 UNTESTED = "untested"
 
@@ -29,7 +36,22 @@ class Hardware:
     gpu_name: str  # regex on nvidia-smi's name
     gpus: int
     min_mem_gib: float
-    compute_cap: str
+    compute_cap: str  # NVIDIA: "12.0"; AMD: the gfx target, "gfx1201"
+    vendor: str = "nvidia"  # nvidia | amd
+
+
+@dataclass(frozen=True)
+class Container:
+    """How a preset runs in docker. The image's entrypoint is `vllm serve` (the official vLLM
+    images and most forks) unless ``own_command``: then the image's default command serves the
+    model by itself and hwb passes no arguments."""
+
+    image: str
+    port: int = 8000  # where the server listens inside the container
+    env: tuple[tuple[str, str], ...] = ()
+    own_command: bool = False
+    cache: str | None = None  # container path for a writable per-preset cache (own weights)
+    root: bool = False  # run as the image's user (its launcher does) instead of the invoking user
 
 
 @dataclass(frozen=True)
@@ -50,6 +72,8 @@ class Preset:
     no_thinking: dict[str, Any] = field(default_factory=dict)
     notes: str = ""
     default: bool = False
+    container: Container | None = None  # run in docker with this template
+    sources: tuple[str, ...] = ()  # where the recipe comes from
 
     def command(
         self,
@@ -85,6 +109,7 @@ class Preset:
             "context": self.context,
             "status": self.status,
             "notes": self.notes,
+            **({"image": self.container.image} if self.container else {}),
         }
 
 
@@ -99,6 +124,23 @@ HARDWARE = {
             min_mem_gib=90,
             compute_cap="12.0",
         ),
+        Hardware(
+            "1x-rtx-pro-6000-blackwell",
+            "1x NVIDIA RTX PRO 6000 Blackwell (96 GB, sm_120)",
+            r"RTX PRO 6000 Blackwell",
+            gpus=1,
+            min_mem_gib=90,
+            compute_cap="12.0",
+        ),
+        Hardware(
+            "1x-radeon-ai-pro-r9700",
+            "1x AMD Radeon AI PRO R9700 (32 GB, RDNA4 gfx1201)",
+            r"gfx1201",
+            gpus=1,
+            min_mem_gib=30,  # the 16 GB RX 9070 XT is gfx1201 too
+            compute_cap="gfx1201",
+            vendor="amd",
+        ),
     )
 }
 
@@ -111,6 +153,33 @@ _PRO6000 = (
     "--enable-chunked-prefill",
     "--enable-prompt-tokens-details",
 )  # fmt: skip
+
+
+# Inkling 2 Mini (Thinking Machines, 2026-11-20): looped MoE, 26.4B total / 3.4B active, one
+# ~20 GB checkpoint (NVFP4 experts in layers 0-19, MXFP8 in 20-23) with a bundled DSpark drafter.
+# Support is in no vLLM release yet (upstream PR vllm#69028): it runs from images.
+INKLING = "thinkingmachines/Inkling-2-Mini"
+INKLING_REVISION = "7a67ae2314b44ef05c87fd1d4d311c58aaeb18f6"
+# vLLM nightly 0.34.0rc1.dev1235, the image Hugging Face's hill-climb ran on one RTX PRO 6000
+# (vllm/vllm-openai:inkling-2-mini is the tag from vLLM's launch post).
+INKLING_IMAGE = (
+    "vllm/vllm-openai@sha256:eaa63fd6ee3aac77f3158e80ed79ec425db3a53f7cd666bf1954e96abfaf19a7"
+)
+# Eliovp's Paiton vLLM plugin for RDNA4; its launcher runs the image's own command (port 8042).
+PAITON = "ghcr.io/eliovp/paiton-vllm-plugin"
+PAITON_W3_IMAGE = (
+    f"{PAITON}:inkling-2-mini-w3-rdna4-v1.2.0"
+    "@sha256:7f1eaad71457b00f548d97fa66af9389ee6730dc8e718339cfeee5d7ed3a449e"
+)
+_DSPARK7 = '{"method":"dspark","num_speculative_tokens":7,"draft_sample_method":"probabilistic"}'
+
+
+def _paiton(image: str) -> Container:
+    """Eliovp's launcher (serve-docker.sh): the image's own command, port 8042, cache in
+    /models/cache, root, one hardware queue."""
+    return Container(image, port=8042, env=(("GPU_MAX_HW_QUEUES", "1"),), own_command=True,
+                     cache="/models/cache", root=True)  # fmt: skip
+
 
 # fmt: off
 PRESETS: tuple[Preset, ...] = (
@@ -367,6 +436,65 @@ PRESETS: tuple[Preset, ...] = (
             "--enable-auto-tool-choice",
         ),
     ),
+    Preset(
+        name="inkling-2-mini",
+        family="inkling",
+        hardware="1x-rtx-pro-6000-blackwell",
+        model=INKLING,
+        revision=INKLING_REVISION,
+        weights_gb=20.0,
+        quant="nvfp4 + mxfp8 (as released)",
+        context=262144,
+        container=Container(INKLING_IMAGE),
+        notes="Hugging Face's best single-RTX-PRO-6000 config: DSpark k=7 probabilistic, 190.6 tok/s "
+              "one stream, 716 tok/s at 8 streams, 20.7K tok/s prefill (thinking on, 512-token answers). "
+              "262K context: the default 1M needs 52.6 GiB of KV cache; 0.85 memory leaves room for the "
+              "drafter. Reasoning cannot be switched off fully (model card).",
+        sources=("https://huggingface.co/blog/inkling-2-mini-inference-hillclimb",
+                 "https://vllm.ai/blog/2026-11-20-inkling2-mini"),
+        args=(
+            "--max-model-len", "262144",
+            "--gpu-memory-utilization", "0.85",
+            "--reasoning-parser", "inkling",
+            "--tool-call-parser", "inkling",
+            "--enable-auto-tool-choice",
+            "--speculative-config", _DSPARK7,
+        ),
+    ),
+    Preset(
+        name="inkling-2-mini-r9700",
+        family="inkling",
+        hardware="1x-radeon-ai-pro-r9700",
+        model=INKLING,
+        revision=INKLING_REVISION,
+        weights_gb=20.0,
+        quant="nvfp4 + mxfp8 (as released)",
+        context=262144,
+        tools=False,  # the image's own command decides the parsers
+        container=_paiton(f"{PAITON}:inkling-2-mini-rdna4-v1.2.0"),
+        notes="Eliovp Paiton image for RDNA4, exact model output: 93.9 tok/s one stream, 249.7 at 4 "
+              "streams, 3.9K tok/s prefill at 8K; peak 29.9 GiB of the card's 32 GB. The image fetches "
+              "its own weights into its cache.",
+        sources=("https://huggingface.co/EliovpAI/Inkling-2-Mini-W3-INT3-Paiton-RDNA4",
+                 "https://github.com/Eliovp-BV/paiton-vllm-plugin"),
+        args=(),
+    ),
+    Preset(
+        name="inkling-2-mini-r9700-w3",
+        family="inkling",
+        hardware="1x-radeon-ai-pro-r9700",
+        model=INKLING,
+        revision=INKLING_REVISION,
+        weights_gb=20.0,
+        quant="3-bit routed experts (Paiton W3), 8-bit attention",
+        context=262144,
+        tools=False,
+        container=_paiton(PAITON_W3_IMAGE),
+        notes="Faster Paiton start, not the exact model output: 179.7 tok/s one stream, 400.5 at 4 "
+              "streams, 5.7K tok/s prefill at 8K (34/35 greedy on Eliovp's task set, same as default).",
+        sources=("https://huggingface.co/EliovpAI/Inkling-2-Mini-W3-INT3-Paiton-RDNA4",),
+        args=(),
+    ),
 )
 # fmt: on
 
@@ -393,8 +521,8 @@ class Gpu:
 
 
 def matching_hardware(gpus: list[Gpu]) -> Hardware | None:
-    """The profile these GPUs satisfy (enough matching cards, memory, architecture)."""
-    for hw in HARDWARE.values():
+    """The largest profile these GPUs satisfy (enough matching cards, memory, architecture)."""
+    for hw in sorted(HARDWARE.values(), key=lambda h: -h.gpus):
         ok = [
             g
             for g in gpus
@@ -407,5 +535,19 @@ def matching_hardware(gpus: list[Gpu]) -> Hardware | None:
     return None
 
 
+def covers(have: Hardware | None, want: Hardware) -> bool:
+    """A machine of profile ``have`` runs presets made for ``want``: same cards, no more of them
+    (a single-card preset runs on a 2-card rig)."""
+    return bool(
+        have
+        and have.gpu_name == want.gpu_name
+        and have.compute_cap == want.compute_cap
+        and have.min_mem_gib >= want.min_mem_gib
+        and have.gpus >= want.gpus
+    )
+
+
 def for_hardware(hw: Hardware | None) -> list[Preset]:
-    return [p for p in PRESETS if hw and p.hardware == hw.id]
+    """Presets this profile runs: its own first, then those for fewer of the same cards."""
+    fits = [p for p in PRESETS if covers(hw, HARDWARE[p.hardware])]
+    return sorted(fits, key=lambda p: hw is None or p.hardware != hw.id)

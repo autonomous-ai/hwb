@@ -35,7 +35,8 @@ gateway/               Cloudflare Worker (JS): R2 report store, D1 analysis tabl
                        client.py (urllib upload/delete, terminal QR), command.py (preview + confirm flow)
   metrics/sampler.py   background time series while benchmarks run; CSV + downsampled report copy
   bench/               cpu + thermal (load.py: stress-ng or stdlib workers; analysis.py: pure judging); memory/disk/gpu pending
-  serve/               presets.py (vLLM launch presets per hardware, data only), suite.py (answer checks + load sweep),
+  serve/               presets.py (vLLM launch presets per hardware, data only; optional docker template per preset),
+                       container.py (`docker run` argv as data: GPUs, mounts, user; removed in finally), suite.py (answer checks + load sweep),
                        client.py (stdlib streaming OpenAI client with timings), __init__.py (launch/endpoint, teardown)
                        weights.py (weights on disk: HF caches incl. other users', ModelScope, dirs, Ollama/LM Studio;
                        completeness; downloads only into the shared HF cache, never a private store)
@@ -91,4 +92,5 @@ Output goes to `hwb-runs/<UTC-timestamp>-<host>-<command>/{report.json,report.md
 - [x] `bench cpu` (stress-ng or stdlib fallback) and `bench thermal`: phases, time series, charts in the viewer; `bench memory|disk` via stress-ng / sysbench / fio still open
 - [ ] `bench gpu`: torch payload in a uv venv: GEMM TFLOPS per dtype, memory bandwidth, H2D/D2H, P2P, NCCL all-reduce
 - [x] `serve`: presets per hardware, uv venv with vllm (`--install-vllm`), health wait, answer checks + load sweep, guaranteed teardown; `--endpoint` for running servers. Mark presets verified after a real run
+- [x] `serve` in docker: per-preset container templates (model-specific vLLM images, ROCm forks), `--docker`/`--image`; AMD GPUs detected from KFD sysfs and served only in containers. hwb never adds sudo for docker
 - [ ] offline bundle: `.pyz` + uv binary + wheelhouse for air-gapped rigs

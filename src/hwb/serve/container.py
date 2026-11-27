@@ -16,6 +16,7 @@ import stat
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..metrics import amdgpu
 from . import presets
 
 NAME_PREFIX = "hwb-serve-"
@@ -58,6 +59,27 @@ def device_gids(paths: tuple[str, ...] = AMD_DEVICES) -> list[int]:
     return sorted(gids)
 
 
+def amd_device_nodes(gpus: list[str], root: Path = Path("/")) -> list[str] | None:
+    """The /dev/dri nodes of these AMD GPUs (PCI order, as hwb numbers them), so a container sees
+    only its own cards. HIP_VISIBLE_DEVICES alone is not enough: a launcher that sizes itself
+    from the first card it finds (Paiton's) then reads another server's card. None when a GPU's
+    nodes cannot be found (the container then gets all of /dev/dri)."""
+    by_index = {g.index: g.addr for g in amdgpu.find(root)}
+    nodes: list[str] = []
+    for i in gpus:
+        addr = by_index.get(i)
+        drm = root / "sys/bus/pci/devices" / addr / "drm" if addr else None
+        found = sorted(
+            n.name
+            for n in (drm.iterdir() if drm and drm.is_dir() else [])
+            if n.name.startswith(("card", "renderD"))
+        )
+        if not found:
+            return None
+        nodes += [f"/dev/dri/{n}" for n in found]
+    return nodes
+
+
 def invoking_user() -> tuple[int, int]:
     """uid:gid for --user: the sudo caller's when hwb runs under sudo."""
     env = os.environ
@@ -80,18 +102,20 @@ def docker_command(
     user: tuple[int, int] | None = None,
     gids: list[int] | None = None,
     environ: dict[str, str] | None = None,  # hwb's own environment, for secrets
+    amd_nodes: list[str] | None = None,  # /dev/dri nodes of the chosen AMD GPUs
 ) -> list[str]:
     env = env or {}
     environ = dict(os.environ) if environ is None else environ
     argv = ["docker", "run", "--rm", "--name", name, "--ipc=host"]
     argv += ["-p", f"127.0.0.1:{port}:{spec.port}"]
     if vendor == "amd":
-        for d in AMD_DEVICES:
+        # only the chosen cards' nodes when known: inside, they are GPUs 0..n-1
+        for d in ["/dev/kfd", *amd_nodes] if amd_nodes else AMD_DEVICES:
             argv += ["--device", d]
         if not spec.root:
             for g in gids or []:
                 argv += ["--group-add", str(g)]
-        if gpus is not None:
+        if gpus is not None and not amd_nodes:
             argv += ["-e", f"HIP_VISIBLE_DEVICES={','.join(gpus)}"]
     else:
         # docker wants the quotes for a list: --gpus '"device=0,1"'

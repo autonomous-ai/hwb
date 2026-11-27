@@ -5,6 +5,10 @@ Two modes:
   process group, wait for /health, test, and always tear it down;
 - endpoint: test a server that is already running (``--endpoint http://host:8000``).
 
+A preset with a container template (and any preset with ``--docker`` / ``--image``) starts the
+server with docker instead (container.py): model-specific images and ROCm builds that pip cannot
+install. AMD GPUs are served only that way.
+
 Either way: answer checks first (suite.CHECKS), then a load sweep over concurrency levels,
 with the sampler recording GPU/CPU temperature, power, clocks and PCIe links throughout.
 vLLM itself lives in an isolated uv venv under $HWB_HOME (``--install-vllm``) or comes from
@@ -18,7 +22,7 @@ import os
 import re
 import resource
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -32,7 +36,7 @@ from ..core.platform import is_root
 from ..core.result import CheckResult, Status
 from ..metrics import workloads
 from ..metrics.sampler import Sampler
-from . import client, presets, suite, weights
+from . import client, container, presets, suite, weights
 
 log = logging.getLogger(__name__)
 
@@ -75,17 +79,56 @@ class ServeOptions:
     dry_run: bool = False
     force: bool = False
     profiles: tuple[suite.Profile, ...] = ()  # extra input/output-length tests after the sweep
+    docker: bool = False  # run the preset in a container (its template, else DEFAULT_IMAGE)
+    image: str | None = None  # this image instead (implies docker)
 
 
 def hwb_home() -> Path:
     return Path(os.environ.get("HWB_HOME") or Path.home() / ".cache" / "hwb")
 
 
+KFD_NODES = Path("/sys/class/kfd/kfd/topology/nodes")
+VRAM_HEAPS = {"1", "2"}  # KFD heap types: frame buffer public / private
+
+
+def amd_gpus(nodes: Path = KFD_NODES) -> list[presets.Gpu]:
+    """AMD GPUs from the ROCm kernel driver's topology (no rocm-smi needed): the gfx target
+    (gfx_target_version 120001 = gfx1201) and the VRAM of the node's memory banks."""
+    out: list[presets.Gpu] = []
+    try:
+        dirs = sorted((d for d in nodes.iterdir() if d.name.isdigit()), key=lambda d: int(d.name))
+    except OSError:
+        return []
+    for d in dirs:
+        props = _kv(d / "properties")
+        version = int(props.get("gfx_target_version", "0") or 0)
+        if not version:  # a CPU node
+            continue
+        major, minor, step = version // 10000, version // 100 % 100, version % 100
+        gfx = f"gfx{major}{minor:x}{step:x}"
+        size = 0
+        for bank in sorted(d.glob("mem_banks/*/properties")):
+            b = _kv(bank)
+            if b.get("heap_type") in VRAM_HEAPS:
+                size += int(b.get("size_in_bytes", "0") or 0)
+        device = int(props.get("device_id", "0") or 0)
+        out.append(presets.Gpu(f"AMD {gfx} (device 0x{device:04x})", size / 2**30, gfx))
+    return out
+
+
+def _kv(path: Path) -> dict[str, str]:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return {}
+    return dict(line.split(None, 1) for line in lines if len(line.split(None, 1)) == 2)
+
+
 def detected_gpus() -> list[presets.Gpu]:
     try:
         rows = nvsmi.query_gpus(("name", "memory.total", "compute_cap"))
     except HwbError:
-        return []
+        return amd_gpus()
     return [
         presets.Gpu(
             str(r.get("name") or ""),
@@ -529,13 +572,10 @@ def run(ctx: RunContext, opts: ServeOptions) -> None:
     if why:
         log.info("%s", why)
     section["preset"] = preset.to_dict()
-    if (
-        preset.hardware in presets.HARDWARE
-        and preset.hardware != (hw.id if hw else None)
-        and not opts.force
-    ):
-        want = presets.HARDWARE[preset.hardware].label
-        have = ", ".join(sorted({g.name for g in gpus})) or "no NVIDIA GPUs"
+    want_hw = presets.HARDWARE.get(preset.hardware)
+    if want_hw and not presets.covers(hw, want_hw) and not opts.force:
+        want = want_hw.label
+        have = ", ".join(sorted({g.name for g in gpus})) or "no supported GPUs"
         ctx.add(CheckResult(
             "serve.vllm", Status.SKIP, f"preset {preset.name} is for {want}; this machine has {have}",
             hint="--force tries it anyway (it will likely run out of GPU memory)",
@@ -571,24 +611,53 @@ def run(ctx: RunContext, opts: ServeOptions) -> None:
                 ",".join(free[:needed]),
             )
 
-    model_arg, weights_env, plan, problem = _weights_plan(preset, found, force=opts.force)
-    section["weights"] = plan
-    if problem:
-        ctx.add(CheckResult("serve.vllm", Status.SKIP, problem[0], hint=problem[1]))
+    vendor = want_hw.vendor if want_hw else (hw.vendor if hw else "nvidia")
+    spec = preset.container
+    if opts.image:
+        spec = replace(spec, image=opts.image) if spec else presets.Container(opts.image)
+    elif opts.docker and spec is None:
+        spec = presets.Container(presets.DEFAULT_IMAGE)
+    if spec is None and vendor == "amd":
+        ctx.add(CheckResult(
+            "serve.vllm", Status.SKIP, f"{preset.name}: hwb serves AMD GPUs only in a container",
+            hint="--image IMAGE runs it in a ROCm vLLM image",
+        ))  # fmt: skip
         return
-    env |= weights_env
+    if spec:
+        section["container"] = {"image": spec.image, "own_command": spec.own_command}
 
-    vllm = find_vllm(opts.vllm)
-    if vllm is None and opts.install_vllm and not opts.dry_run:
+    if spec and spec.own_command:  # the image fetches and keeps its own weights
+        model_arg: str | None = None
+        cache = container_cache(preset)
+        plan: dict[str, Any] = {"cached": False, "source": "image",
+                                "note": f"the image fetches its own weights into {cache}"}  # fmt: skip
+    else:
+        model_arg, weights_env, plan, problem = _weights_plan(preset, found, force=opts.force)
+        if problem:
+            section["weights"] = plan
+            ctx.add(CheckResult("serve.vllm", Status.SKIP, problem[0], hint=problem[1]))
+            return
+        env |= weights_env
+    section["weights"] = plan
+
+    vllm = None if spec else find_vllm(opts.vllm)
+    if vllm is None and spec is None and opts.install_vllm and not opts.dry_run:
         vllm = install_vllm(preset)
     if vllm:
         env |= venv_env(vllm)
     # vLLM trusts the driver's P2P report unless told to test it; with the IOMMU translating
     # (Ubuntu's default on Intel), P2P reads return garbage and TP all-reduce hangs in warmup.
     env.setdefault("VLLM_SKIP_P2P_CHECK", os.environ.get("VLLM_SKIP_P2P_CHECK", "0"))
-    argv = preset.command(host="127.0.0.1", port=opts.port, vllm=vllm or "vllm", model=model_arg)
+    name = ""
+    if spec:
+        name = container.NAME_PREFIX + re.sub(r"[^A-Za-z0-9_.-]", "-", ctx.run_dir.name)
+        argv = _docker_argv(preset, spec, name, opts, vendor, model_arg, env, section.get("gpus"))
+    else:
+        argv = preset.command(
+            host="127.0.0.1", port=opts.port, vllm=vllm or "vllm", model=model_arg
+        )
     section["command"] = argv
-    if "instanttensor" in argv and not opts.dry_run:
+    if "instanttensor" in argv and not spec and not opts.dry_run:
         used = env.get("CUDA_VISIBLE_DEVICES", ",".join(str(i) for i in range(needed))).split(",")
         no_fast_load = loader_problem(_memlock(), _held_mib(used))
         if no_fast_load:
@@ -596,9 +665,11 @@ def run(ctx: RunContext, opts: ServeOptions) -> None:
             del argv[at : at + 2]
             section["loader"] = f"vLLM's default loader: instanttensor would fail, {no_fast_load}"
             log.warning("not using --load-format instanttensor: %s", no_fast_load)
-    shown = " ".join(f"{k}={v}" for k, v in env.items() if k != "PATH")  # PATH: the venv's bin
+    # PATH: the venv's bin; a container gets its environment as -e flags
+    shown = "" if spec else " ".join(f"{k}={v}" for k, v in env.items() if k != "PATH")
     print(f"weights: {plan['note']}")
-    print("vllm command:\n  " + (shown + " " if shown else "") + " ".join(argv))
+    print(("docker" if spec else "vllm") + " command:\n  " + (shown + " " if shown else "")
+          + " ".join(_quote(a) for a in argv))  # fmt: skip
     if opts.dry_run:
         ctx.add(
             CheckResult(
@@ -608,23 +679,79 @@ def run(ctx: RunContext, opts: ServeOptions) -> None:
             )
         )
         return
-    if vllm is None:
+    if spec and proc.which("docker") is None:
+        ctx.add(CheckResult(
+            "serve.vllm", Status.SKIP, f"{preset.name} runs in a container and docker is not installed",
+            hint="install Docker" + (" and the NVIDIA Container Toolkit" if vendor == "nvidia" else "")
+            + ", and add this user to the docker group",
+        ))  # fmt: skip
+        return
+    if vllm is None and spec is None:
         ctx.add(CheckResult(
             "serve.vllm", Status.SKIP, "vllm not found",
-            hint=f"hwb serve --install-vllm (uv venv in {vllm_venv()}), or --vllm PATH",
+            hint=f"hwb serve --install-vllm (uv venv in {vllm_venv()}), --vllm PATH, "
+            f"or --docker ({presets.DEFAULT_IMAGE})",
         ))  # fmt: skip
         return
 
     base = f"http://127.0.0.1:{opts.port}"
     log_path = ctx.run_dir / "vllm.log"
-    with proc.spawn(argv, stdout=log_path, stderr=log_path, env=env) as child:
-        ready_s = wait_ready(base, child, log_path, opts.ready_timeout_s)
-        section |= {"model": preset.name, "endpoint": base, "ready_s": round(ready_s, 1)}
-        ctx.add(CheckResult(
-            "serve.vllm", Status.PASS, f"{preset.name} ({preset.model}) ready in {ready_s:.0f}s; {plan['note']}",
-            data={"preset": preset.to_dict(), "weights": plan},
-        ))  # fmt: skip
-        _test(ctx, base, preset.name, preset, opts, section, sample=True)
+    try:
+        with proc.spawn(argv, stdout=log_path, stderr=log_path, env=None if spec else env) as child:
+            ready_s = wait_ready(base, child, log_path, opts.ready_timeout_s)
+            model = preset.name
+            if spec and spec.own_command:  # the image named the model itself
+                api_key = os.environ.get(ENV_API_KEY)
+                model = (client.served_models(base, api_key=api_key) or [model])[0]
+            section |= {"model": model, "endpoint": base, "ready_s": round(ready_s, 1)}
+            ctx.add(CheckResult(
+                "serve.vllm", Status.PASS,
+                f"{preset.name} ({preset.model}) ready in {ready_s:.0f}s"
+                + (f" in {spec.image}" if spec else "") + f"; {plan['note']}",
+                data={"preset": preset.to_dict(), "weights": plan},
+            ))  # fmt: skip
+            _test(ctx, base, model, preset, opts, section, sample=True)
+    finally:
+        if spec:  # stopping `docker run` normally removes it (--rm); make sure
+            proc.run(container.remove_command(name), timeout=120)
+
+
+def container_cache(preset: presets.Preset) -> Path:
+    return hwb_home() / "docker" / preset.name
+
+
+def _docker_argv(
+    preset: presets.Preset,
+    spec: presets.Container,
+    name: str,
+    opts: ServeOptions,
+    vendor: str,
+    model_arg: str | None,
+    env: dict[str, str],
+    gpus: list[str] | None,
+) -> list[str]:
+    hub_env = env.get("HF_HUB_CACHE")
+    hub = Path(hub_env) if hub_env else weights.default_hub()
+    # Another user's cache: read it, never write into it (as this user or as root).
+    readonly = bool(hub_env) and not os.access(hub, os.W_OK)
+    mounts = container.Mounts(
+        hub=hub, hub_readonly=readonly, home=hwb_home() / "docker" / "home",
+        cache=container_cache(preset),
+    )  # fmt: skip
+    if not opts.dry_run:
+        # docker would create missing mount sources as root
+        for d in (mounts.home, mounts.cache, *(() if hub_env else (hub,))):
+            d.mkdir(parents=True, exist_ok=True)
+    return container.docker_command(
+        preset, spec, name=name, port=opts.port, vendor=vendor, mounts=mounts, gpus=gpus,
+        model_arg=model_arg, env=env, user=container.invoking_user(),
+        gids=container.device_gids() if vendor == "amd" else None,
+    )  # fmt: skip
+
+
+def _quote(arg: str) -> str:
+    """Shell-quote for display, so a printed command can be pasted."""
+    return arg if re.fullmatch(r"[\w@%+=:,./-]+", arg) else "'" + arg.replace("'", "'\\''") + "'"
 
 
 def _choose_preset(
@@ -642,10 +769,11 @@ def _choose_preset(
     ranked = sorted(on_disk, key=lambda p: (not p.default, p.status != presets.VERIFIED))
     if ranked:
         return ranked[0], f"using {ranked[0].name}: its weights are already on this machine"
-    default = next(p for p in candidates if p.default)
+    # for_hardware lists this profile's own presets first, so its default wins
+    default = next((p for p in candidates if p.default), candidates[0])
     return (
         default,
-        f"no preset's weights are on this machine yet; {default.name} will be downloaded",
+        f"no preset's weights are on this machine yet; {default.name} ({default.status}) will be downloaded",
     )
 
 

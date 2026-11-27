@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import sys
 import textwrap
@@ -15,9 +16,9 @@ from typing import Any
 
 import pytest
 
-from hwb import cli
+from hwb import cli, serve
 from hwb.core.errors import HwbError
-from hwb.serve import client, presets, suite
+from hwb.serve import client, container, presets, suite
 
 # A minimal vLLM: answers the check prompts, streams forced-length output, reports usage.
 FAKE_SERVER = textwrap.dedent(
@@ -122,6 +123,7 @@ KNOWN_PARSERS = {
     "deepseek_v4",
     "glm45",
     "glm47",
+    "inkling",
     "qwen3",
     "qwen3_coder",
     "qwen3_xml",
@@ -133,8 +135,9 @@ def test_presets_are_consistent() -> None:
     names = [p.name for p in presets.PRESETS]
     assert len(names) == len(set(names))
     for hw in presets.HARDWARE.values():
-        defaults = [p for p in presets.for_hardware(hw) if p.default]
-        assert len(defaults) == 1 and defaults[0].status == presets.VERIFIED
+        own = [p for p in presets.for_hardware(hw) if p.default and p.hardware == hw.id]
+        # a profile may have no verified preset yet; a default must be verified
+        assert len(own) <= 1 and all(p.status == presets.VERIFIED for p in own)
     for p in presets.PRESETS:
         hw = presets.HARDWARE[p.hardware]
         total_gb = hw.gpus * hw.min_mem_gib * 1.0737  # GiB -> GB
@@ -147,6 +150,10 @@ def test_presets_are_consistent() -> None:
         cmd = p.command(port=9000)
         assert cmd[:3] == ["vllm", "serve", p.model] and "--served-model-name" in cmd
         assert cmd[cmd.index("--port") + 1] == "9000"
+        if hw.vendor == "amd":  # no ROCm vLLM venv: AMD presets are container templates
+            assert p.container is not None
+        if p.container and p.container.own_command:
+            assert not p.args and not p.tools
 
 
 def test_deepseek_preset_is_the_production_command() -> None:
@@ -164,8 +171,119 @@ def test_hardware_matching() -> None:
     a6000 = presets.Gpu("NVIDIA RTX A6000", 47.5, "8.6")
     hw = presets.matching_hardware([pro, pro])
     assert hw is not None and hw.id == "2x-rtx-pro-6000-blackwell"
-    assert presets.matching_hardware([pro]) is None  # one card is not enough
+    one = presets.matching_hardware([pro])
+    assert one is not None and one.id == "1x-rtx-pro-6000-blackwell"
     assert presets.matching_hardware([a6000, a6000]) is None  # the "A6000" naming trap
+    # a 2-card rig runs the 1-card presets too, its own first; one card does not run 2-card ones
+    names = [p.name for p in presets.for_hardware(hw)]
+    assert names[0] == "deepseek-v4-flash-vision" and "inkling-2-mini" in names
+    assert [p.name for p in presets.for_hardware(one)] == ["inkling-2-mini"]
+    r9700 = presets.Gpu("AMD gfx1201 (device 0x7551)", 31.9, "gfx1201")
+    rx9070 = presets.Gpu("AMD gfx1201 (device 0x7550)", 15.9, "gfx1201")
+    amd = presets.matching_hardware([r9700])
+    assert amd is not None and amd.vendor == "amd"
+    assert {p.name for p in presets.for_hardware(amd)} == {
+        "inkling-2-mini-r9700",
+        "inkling-2-mini-r9700-w3",
+    }
+    assert presets.matching_hardware([rx9070]) is None  # same chip, 16 GB
+
+
+def test_choose_preset_without_a_default() -> None:
+    one = presets.HARDWARE["1x-rtx-pro-6000-blackwell"]
+    p, why = serve._choose_preset(None, one, [])
+    assert p is not None and p.name == "inkling-2-mini" and "untested" in why
+    two = presets.HARDWARE["2x-rtx-pro-6000-blackwell"]
+    p, _ = serve._choose_preset(None, two, [])
+    assert p is not None and p.default and p.hardware == two.id
+
+
+def test_amd_gpus_from_kfd_topology(tmp_path: Path) -> None:
+    cpu = tmp_path / "0"
+    cpu.mkdir()
+    (cpu / "properties").write_text("cpu_cores_count 32\ngfx_target_version 0\n")
+    gpu = tmp_path / "1"
+    (gpu / "mem_banks" / "0").mkdir(parents=True)
+    (gpu / "properties").write_text("gfx_target_version 120001\ndevice_id 30033\n")
+    (gpu / "mem_banks" / "0" / "properties").write_text("heap_type 1\nsize_in_bytes 34342961152\n")
+    gpus = serve.amd_gpus(tmp_path)
+    assert len(gpus) == 1
+    assert gpus[0].compute_cap == "gfx1201" and gpus[0].name.endswith("0x7551)")
+    assert 31.9 < gpus[0].mem_gib < 32.1
+    assert serve.amd_gpus(tmp_path / "missing") == []
+
+
+def _mounts(tmp_path: Path, readonly: bool = False) -> container.Mounts:
+    return container.Mounts(tmp_path / "hub", readonly, tmp_path / "home", tmp_path / "cache")
+
+
+def test_docker_command_nvidia(tmp_path: Path) -> None:
+    p = presets.by_name("inkling-2-mini")
+    assert p is not None and p.container is not None
+    argv = container.docker_command(
+        p, p.container, name="hwb-serve-x", port=8001, vendor="nvidia",
+        mounts=_mounts(tmp_path), gpus=["1"], env={"HF_HUB_OFFLINE": "1", "CUDA_VISIBLE_DEVICES": "1"},
+        user=(1000, 1000), environ={"HF_TOKEN": "secret"},
+    )  # fmt: skip
+    assert argv[:5] == ["docker", "run", "--rm", "--name", "hwb-serve-x"]
+    assert argv[argv.index("-p") + 1] == "127.0.0.1:8001:8000"
+    assert argv[argv.index("--gpus") + 1] == '"device=1"'
+    assert argv[argv.index("--user") + 1] == "1000:1000"
+    assert f"{tmp_path / 'hub'}:{container.HUB}" in argv and "HF_HUB_OFFLINE=1" in argv
+    assert "secret" not in " ".join(argv) and "HF_TOKEN" in argv  # by name only
+    assert not any(a.startswith("CUDA_VISIBLE_DEVICES") for a in argv)  # --gpus does that
+    tail = argv[argv.index(p.container.image) + 1 :]
+    assert tail[:3] == [p.model, "--revision", p.revision]
+    assert tail[tail.index("--port") + 1] == "8000" and tail[tail.index("--host") + 1] == "0.0.0.0"  # noqa: S104
+    assert "--speculative-config" in tail
+
+
+def test_docker_command_amd_own_command(tmp_path: Path) -> None:
+    p = presets.by_name("inkling-2-mini-r9700")
+    assert p is not None and p.container is not None
+    argv = container.docker_command(
+        p, p.container, name="n", port=8000, vendor="amd", mounts=_mounts(tmp_path),
+        user=(1000, 1000), gids=[44, 992], environ={},
+    )  # fmt: skip
+    assert argv[-1] == p.container.image  # the image's own command, no vllm args
+    assert argv[argv.index("/dev/kfd") - 1 : argv.index("/dev/kfd") + 1] == ["--device", "/dev/kfd"]
+    assert "/dev/dri" in argv and "--gpus" not in argv
+    assert "--user" not in argv and "--group-add" not in argv  # its launcher runs as root
+    assert argv[argv.index("-p") + 1] == "127.0.0.1:8000:8042"
+    assert f"{tmp_path / 'cache'}:/models/cache" in argv and "GPU_MAX_HW_QUEUES=1" in argv
+    assert not any(container.HUB in a for a in argv)
+
+
+def test_docker_command_plain_preset_and_local_dir(tmp_path: Path) -> None:
+    p = presets.by_name("deepseek-v4-flash-vision")
+    assert p is not None
+    spec = presets.Container(presets.DEFAULT_IMAGE)
+    argv = container.docker_command(
+        p, spec, name="n", port=8000, vendor="nvidia", mounts=_mounts(tmp_path, readonly=True),
+        model_arg="/models/ds", user=(1000, 1000), environ={},
+    )  # fmt: skip
+    assert argv[argv.index("--gpus") + 1] == "all"
+    assert f"{tmp_path / 'hub'}:{container.HUB}:ro" in argv
+    assert "/models/ds:/models/ds:ro" in argv
+    assert argv[argv.index("--ulimit") + 1] == "memlock=-1:-1"  # instanttensor
+    tail = argv[argv.index(presets.DEFAULT_IMAGE) + 1 :]
+    assert tail[0] == "/models/ds" and "--revision" not in tail
+
+
+def test_serve_dry_run_prints_docker_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("HWB_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("HF_HOME", str(tmp_path / "hf"))
+    rc = cli.main(
+        ["--out", str(tmp_path / "runs"), "serve", "--preset", "inkling-2-mini", "--force",
+         "--dry-run"]
+    )  # fmt: skip
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "docker command:" in out and "docker run --rm" in out
+    assert '\'{"method":"dspark"' in out  # quoted so it pastes
+    assert not (tmp_path / "home" / "docker").exists()  # a dry run creates nothing
 
 
 # ---------------------------------------------------------------- client and suite
@@ -318,6 +436,54 @@ def test_launch_mode_starts_tests_and_stops_vllm(fake_module: Path, tmp_path: Pa
     sec = report["sections"]["bench"]["serve"]
     assert sec["command"][:3] == [str(fake_vllm), "serve", "Qwen/Qwen3.6-35B-A3B-FP8"]
     # Torn down: nothing listens on the port any more.
+    time.sleep(0.2)
+    with socket.socket() as s:
+        assert s.connect_ex(("127.0.0.1", port)) != 0
+
+
+@pytest.mark.parametrize("preset", ["inkling-2-mini", "inkling-2-mini-r9700"])
+def test_docker_launch_tests_and_removes_the_container(
+    preset: str, fake_module: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A fake docker: `run` serves the fake vLLM on the published host port, `rm` is recorded.
+    calls = tmp_path / "docker-calls"
+    fake = tmp_path / "bin" / "docker"
+    fake.parent.mkdir()
+    fake.write_text(textwrap.dedent(f"""\
+        #!{sys.executable}
+        import sys, runpy
+        args = sys.argv[1:]
+        with open({str(calls)!r}, "a") as f:
+            f.write(" ".join(args) + "\\n")
+        if args[0] == "run":
+            port = args[args.index("-p") + 1].split(":")[1]
+            sys.argv = ["fake", "--port", port]
+            runpy.run_path({str(fake_module)!r}, run_name="__main__")
+        """))  # fmt: skip
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake.parent}:{os.environ['PATH']}")
+    monkeypatch.setenv("HWB_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("HF_HOME", str(tmp_path / "hf"))
+    out = tmp_path / "runs"
+    port = _free_port()
+    argv = [
+        "--out", str(out), "serve", "--preset", preset, "--force", "--port", str(port),
+        "--concurrency", "2", "--requests", "1", "--max-tokens", "8", "--ready-timeout", "60",
+    ]  # fmt: skip
+    assert cli.main(argv) == 0
+    report = _report(out)
+    st = {r["name"]: r["status"] for r in report["results"]}
+    assert st["serve.vllm"] == "pass" and st["serve.load"] == "pass", st
+    sec = report["sections"]["bench"]["serve"]
+    assert sec["command"][:2] == ["docker", "run"] and sec["container"]["image"]
+    lines = calls.read_text().splitlines()
+    assert lines[0].startswith("run --rm --name hwb-serve-")
+    name = lines[0].split()[3]
+    assert lines[-1] == f"rm -f {name}"  # removed even though --rm should have done it
+    if preset.endswith("r9700"):  # the image named its model: the tests used that name
+        assert sec["model"] == "fake-model"
+    else:
+        assert (tmp_path / "home" / "docker" / "home").is_dir()  # HOME for kernel caches
     time.sleep(0.2)
     with socket.socket() as s:
         assert s.connect_ex(("127.0.0.1", port)) != 0

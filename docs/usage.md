@@ -156,7 +156,7 @@ Use it for problems that only show under real jobs after a while. Example: a cus
 
 ```
 hwb serve --list
-hwb serve [--preset NAME | --model HF_ID_OR_DIR] [--dry-run] [--install-vllm | --vllm PATH] [--force]
+hwb serve [--preset NAME | --model HF_ID_OR_DIR] [--dry-run] [--install-vllm | --vllm PATH | --docker | --image IMAGE] [--force]
 hwb serve --endpoint http://host:8000 [--model NAME] [--preset NAME]
           [--concurrency 1,4,16] [--requests 4] [--max-tokens 256] [--ready-timeout 3600]
           [--profiles chat,rag,reasoning,agent | all | IN/OUT]
@@ -200,7 +200,17 @@ Hosts a real model with vLLM, or tests one that's already running, and measures 
 
 **vLLM** comes from `--vllm PATH`, then `$HWB_HOME/venvs/vllm`, then `PATH`. `--install-vllm` creates that venv with uv's own Python (it ships the headers Triton compiles against), installs the pinned version plus extras such as `b12x` for Blackwell kernels, pins the venv's pip `nvcc` to the CUDA version torch was built for, and fetches FlashInfer's prebuilt kernels (`vllm download-kernels`). Nothing is installed into the system or core Python. At launch hwb puts the venv's `bin` on `PATH`, points `CUDA_HOME` at the venv's pip toolkit when the rig has no CUDA toolkit or an older one (Ubuntu's `nvidia-cuda-toolkit` is CUDA 12.0, which knows no Blackwell), so JIT-compiled kernels (DeepGEMM, FlashInfer) build for the GPU. A `CUDA_HOME` you set yourself is kept. It also sets `VLLM_SKIP_P2P_CHECK=0`, so vLLM tests GPU peer-to-peer copies instead of trusting the driver. If vLLM fails to start, hwb prints the worker's own error under "Root cause", with a hint when it recognizes it. Hugging Face downloads use `HF_TOKEN` if it's set; the presets' models are public, so it's optional. `HWB_LLM_API_KEY` is sent as a Bearer token to servers that require one.
 
-**Presets** (`hwb serve --list`) are per hardware profile:
+**Docker.** A preset with a container template (column "runs in" of `hwb serve --list`) starts in docker instead of a local vLLM: the quick way to run a model-specific vLLM image or a ROCm fork that pip can't install. `--docker` runs any other preset in the stock `vllm/vllm-openai` image of the pinned vLLM version, and `--image IMAGE` in an image you name (the image's entrypoint must be `vllm serve`, as in the official images). AMD GPUs are served only this way. The container:
+- gets only the GPUs hwb chose (`--gpus "device=…"` on NVIDIA, which needs the NVIDIA Container Toolkit; `/dev/kfd` + `/dev/dri` on AMD);
+- publishes the server on `127.0.0.1:--port` only;
+- runs as the invoking user, so what it writes into the shared Hugging Face cache stays yours (templates whose image needs root say so), with `HOME` in `$HWB_HOME/docker/home` so compiled kernels survive restarts;
+- mounts the Hugging Face hub (read-only when it is another user's cache) and a local model directory read-only;
+- receives `HF_TOKEN` by name only, so the token is never printed or stored;
+- is removed afterwards (`docker rm -f`), even after Ctrl-C.
+
+hwb never runs docker with sudo: the user must be in the `docker` group (or run hwb as root). The image is pulled on first use, like a model download. `--dry-run` prints the full `docker run` command.
+
+**Presets** (`hwb serve --list`) are per hardware profile. A rig with two cards also runs the presets for one card of the same kind:
 - **"verified"** means the exact command ran on that hardware.
 - **"untested"** means it was derived from the model card, the weight size and vLLM's source.
 
@@ -215,6 +225,16 @@ The presets for **2× RTX PRO 6000 Blackwell** (2 × 96 GB, sm_120):
 | `qwen3.6-35b-a3b-fp8` | Qwen/Qwen3.6-35B-A3B-FP8 (one copy per GPU) | 38 GB | untested |
 | `glm-4.5-air-fp8` | zai-org/GLM-4.5-Air-FP8 | 113 GB | untested |
 | `glm-4.7-flash` | zai-org/GLM-4.7-Flash | 62 GB bf16 | untested |
+
+For **1× RTX PRO 6000 Blackwell** (96 GB) and **1× AMD Radeon AI PRO R9700** (32 GB, RDNA4 gfx1201), all in docker. Inkling 2 Mini (Thinking Machines, 26.4B total / 3.4B active looped MoE, one ~20 GB NVFP4 + MXFP8 checkpoint) is in no vLLM release yet, so it runs from images:
+
+| preset | hardware | image | published numbers | status |
+|---|---|---|---|---|
+| `inkling-2-mini` | 1× RTX PRO 6000 | vLLM nightly (digest from Hugging Face's single-card hill-climb), DSpark k=7, 262K context | 190.6 tok/s one stream, 716 tok/s at 8 | untested |
+| `inkling-2-mini-r9700` | 1× R9700 | Eliovp Paiton `inkling-2-mini-rdna4-v1.2.0` (its own command, exact output) | 93.9 tok/s one stream, 249.7 at 4 | untested |
+| `inkling-2-mini-r9700-w3` | 1× R9700 | Paiton W3: 3-bit routed experts (faster, not exact output) | 179.7 tok/s one stream, 400.5 at 4 | untested |
+
+Inkling's reasoning can't be switched off fully (model card), so short answer checks may run out of budget while it reasons.
 
 Models that don't fit 192 GB with room for KV cache are left out: GLM-5.x (≥ 204 GB even as NVFP4), Qwen3-235B FP8, DeepSeek V4.1/V4-Pro. Presets live in `src/hwb/serve/presets.py`. When an untested one has run cleanly on the hardware, mark it verified.
 

@@ -130,6 +130,14 @@ CHECKS: tuple[Check, ...] = (
 )
 
 
+# Extra tokens for a check's second try when reasoning used up the first budget.
+REASONING_BUDGET = 4096
+
+
+def _reasoned_out(r: Reply) -> bool:
+    return r.ok and not r.text.strip() and not r.tool_calls and bool(r.reasoning)
+
+
 def run_checks(
     base: str,
     model: str,
@@ -148,26 +156,42 @@ def run_checks(
         extra: dict[str, Any] = {"chat_template_kwargs": no_thinking} if no_thinking else {}
         if c.tools:
             extra |= {"tools": c.tools, "tool_choice": "auto"}
+        budget = c.max_tokens
         r = chat(
             base,
             model,
             [{"role": "user", "content": c.prompt}],
-            max_tokens=c.max_tokens,
+            max_tokens=budget,
             api_key=api_key,
             **extra,
         )
+        if _reasoned_out(r):
+            # Some models cannot switch reasoning off (Inkling) and some servers ignore the switch:
+            # ask once more with room to think, so the check judges the answer, not the budget.
+            budget += REASONING_BUDGET
+            r = chat(
+                base,
+                model,
+                [{"role": "user", "content": c.prompt}],
+                max_tokens=budget,
+                api_key=api_key,
+                **extra,
+            )
         ok, detail = c.verify(r) if r.ok else (False, r.error or "request failed")
-        if not ok and r.ok and not r.text.strip() and not r.tool_calls and r.reasoning:
+        if not ok and _reasoned_out(r):
             detail = (
-                f"no answer: the {c.max_tokens}-token budget went to reasoning; the server did not "
+                f"no answer: the {budget}-token budget went to reasoning; the server did not "
                 "accept the switch to turn reasoning off (pass --preset for this model)"
             )
+        elif budget > c.max_tokens:
+            detail += f" (after reasoning: the {c.max_tokens}-token budget was not enough)"
         out.append(
             {
                 "name": c.name,
                 "status": "pass" if ok else "fail",
                 "detail": detail,
                 "answer": (r.text.strip() or json.dumps(r.tool_calls))[:300],
+                "max_tokens": budget,
                 "ttft_s": r.ttft_s,
                 "prompt_tokens": r.prompt_tokens,
                 "completion_tokens": r.completion_tokens,

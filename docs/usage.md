@@ -156,13 +156,15 @@ Use it for problems that only show under real jobs after a while. Example: a cus
 
 ```
 hwb serve --list
-hwb serve [--preset NAME | --model HF_ID_OR_DIR] [--dry-run] [--install-vllm | --vllm PATH | --docker | --image IMAGE] [--force]
+hwb serve [--preset NAME | --model HF_ID_OR_DIR] [--dry-run] [--install-vllm | --vllm PATH | --docker | --image IMAGE] [--gpus 0,2] [--force]
 hwb serve --endpoint http://host:8000 [--model NAME] [--preset NAME]
           [--concurrency 1,4,16] [--requests 4] [--max-tokens 256] [--ready-timeout 3600]
           [--profiles chat,rag,reasoning,agent | all | IN/OUT]
 ```
 
 Hosts a real model with vLLM, or tests one that's already running, and measures it. **Step-by-step guide: [Serving and testing a model](serve.md).**
+
+`--gpus 0,2` serves on those cards only (nvidia-smi / KFD indices): the hardware match, the preset and the server see just them. Use it to test one free card on a box whose other cards are busy; a card that is already in use is refused unless `--force`.
 
 1. **Answer checks**, run with reasoning off and temperature 0. They catch a server that's up but wrong: bad quantization, the wrong chat template, a missing tool-call or reasoning parser.
    - arithmetic (`17 × 23`);
@@ -226,15 +228,16 @@ The presets for **2× RTX PRO 6000 Blackwell** (2 × 96 GB, sm_120):
 | `glm-4.5-air-fp8` | zai-org/GLM-4.5-Air-FP8 | 113 GB | untested |
 | `glm-4.7-flash` | zai-org/GLM-4.7-Flash | 62 GB bf16 | untested |
 
-For **1× RTX PRO 6000 Blackwell** (96 GB) and **1× AMD Radeon AI PRO R9700** (32 GB, RDNA4 gfx1201), all in docker. Inkling 2 Mini (Thinking Machines, 26.4B total / 3.4B active looped MoE, one ~20 GB NVFP4 + MXFP8 checkpoint) is in no vLLM release yet, so it runs from images:
+For **1× RTX PRO 6000 Blackwell** (96 GB), **1× RTX 5090** (32 GB) and **1× AMD Radeon AI PRO R9700** (32 GB, RDNA4 gfx1201), all in docker. A rig with more cards runs them on one card: pick it with `--gpus` (e.g. a free card on a shared box). Inkling 2 Mini (Thinking Machines, 26.4B total / 3.4B active looped MoE, one ~20 GB NVFP4 + MXFP8 checkpoint) is in no vLLM release yet, so it runs from images:
 
 | preset | hardware | image | published numbers | status |
 |---|---|---|---|---|
 | `inkling-2-mini` | 1× RTX PRO 6000 | vLLM nightly (digest from Hugging Face's single-card hill-climb), DSpark k=7, 262K context | 190.6 tok/s one stream, 716 tok/s at 8 | untested |
-| `inkling-2-mini-r9700` | 1× R9700 | Eliovp Paiton `inkling-2-mini-rdna4-v1.2.0` (its own command, exact output) | 93.9 tok/s one stream, 249.7 at 4 | untested |
-| `inkling-2-mini-r9700-w3` | 1× R9700 | Paiton W3: 3-bit routed experts (faster, not exact output) | 179.7 tok/s one stream, 400.5 at 4 | untested |
+| `inkling-2-mini-5090` | 1× RTX 5090 | same image and DSpark k=7, 64K context (32 GB card) | — | untested |
+| `inkling-2-mini-r9700` | 1× R9700 | Eliovp Paiton `inkling-2-mini-rdna4-v1.2.0` (its own command, exact output) | 93.9 tok/s one stream, 249.7 at 4 | runs: 108.8 / 266.4 measured |
+| `inkling-2-mini-r9700-w3` | 1× R9700 | Paiton W3: 3-bit routed experts (faster, not exact output) | 179.7 tok/s one stream, 400.5 at 4 | runs: 136.7 / 346.6 measured |
 
-Inkling's reasoning can't be switched off fully (model card), so short answer checks may run out of budget while it reasons.
+Inkling's reasoning can't be switched off fully (model card). When reasoning uses up an answer check's short budget, the check is asked once more with 4096 extra tokens, and the result says so.
 
 Models that don't fit 192 GB with room for KV cache are left out: GLM-5.x (≥ 204 GB even as NVFP4), Qwen3-235B FP8, DeepSeek V4.1/V4-Pro. Presets live in `src/hwb/serve/presets.py`. When an untested one has run cleanly on the hardware, mark it verified.
 

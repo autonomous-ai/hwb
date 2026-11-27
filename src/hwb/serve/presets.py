@@ -478,14 +478,18 @@ PRESETS: tuple[Preset, ...] = (
         weights_gb=20.0,
         quant="nvfp4 + mxfp8 (as released)",
         context=65536,
+        status=VERIFIED,
         container=Container(INKLING_IMAGE),
-        notes="The RTX PRO 6000 recipe on a 32 GB card, the peer of the Radeon AI PRO R9700: ~20 GB "
-              "of weights leave room for 64K of context (262K would need ~13 GiB of KV cache) next "
-              "to the DSpark drafter. Reasoning cannot be switched off fully (model card).",
+        notes="The RTX PRO 6000 recipe on a 32 GB card, the peer of the Radeon AI PRO R9700. KV cache "
+              "is tight: 64K of context needs 6.66 GiB, which fits only with 16 sequences at most "
+              "(vLLM's default 256 reserves ~1.4 GiB more for activations and CUDA graphs) and 0.94 "
+              "of the card. Images built for CUDA 13.2 run on R580 drivers with "
+              "NVIDIA_DISABLE_REQUIRE=1. Reasoning cannot be switched off fully (model card).",
         sources=("https://huggingface.co/blog/inkling-2-mini-inference-hillclimb",),
         args=(
             "--max-model-len", "65536",
-            "--gpu-memory-utilization", "0.92",
+            "--max-num-seqs", "16",
+            "--gpu-memory-utilization", "0.94",
             "--reasoning-parser", "inkling",
             "--tool-call-parser", "inkling",
             "--enable-auto-tool-choice",

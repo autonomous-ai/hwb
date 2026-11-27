@@ -233,7 +233,7 @@ For **1× RTX PRO 6000 Blackwell** (96 GB), **1× RTX 5090** (32 GB) and **1× A
 | preset | hardware | image | published numbers | status |
 |---|---|---|---|---|
 | `inkling-2-mini` | 1× RTX PRO 6000 | vLLM nightly (digest from Hugging Face's single-card hill-climb), DSpark k=7, 262K context | 190.6 tok/s one stream, 716 tok/s at 8 | untested |
-| `inkling-2-mini-5090` | 1× RTX 5090 | same image and DSpark k=7, 64K context (32 GB card) | — | untested |
+| `inkling-2-mini-5090` | 1× RTX 5090 | same image and DSpark k=7, 64K context with at most 16 sequences (32 GB card; `NVIDIA_DISABLE_REQUIRE=1` on R580 drivers) | measured: 194.3 tok/s one stream, 394.9 at 4 | verified |
 | `inkling-2-mini-r9700` | 1× R9700 | Eliovp Paiton `inkling-2-mini-rdna4-v1.2.0` (its own command, exact output) | 93.9 tok/s one stream, 249.7 at 4 | runs: 108.8 / 266.4 measured |
 | `inkling-2-mini-r9700-w3` | 1× R9700 | Paiton W3: 3-bit routed experts (faster, not exact output) | 179.7 tok/s one stream, 400.5 at 4 | runs: 136.7 / 346.6 measured |
 

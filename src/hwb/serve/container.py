@@ -26,6 +26,10 @@ PASS_ENV = ("HF_HUB_OFFLINE", "VLLM_SKIP_P2P_CHECK")
 # Secrets: passed by name only, so docker reads the value from hwb's environment and it is never
 # printed or stored in the report.
 SECRET_ENV = ("HF_TOKEN",)
+# Set by the operator: NVIDIA_DISABLE_REQUIRE=1 skips the toolkit's "cuda>=X.Y" check of an image
+# built with a newer CUDA minor than the driver reports (CUDA 13.2 image on R580 = 13.0 runs, by
+# minor-version compatibility).
+OPERATOR_ENV = ("NVIDIA_DISABLE_REQUIRE",)
 AMD_DEVICES = ("/dev/kfd", "/dev/dri")
 
 
@@ -92,6 +96,9 @@ def docker_command(
     else:
         # docker wants the quotes for a list: --gpus '"device=0,1"'
         argv += ["--gpus", f'"device={",".join(gpus)}"' if gpus is not None else "all"]
+        for k in OPERATOR_ENV:
+            if environ.get(k):
+                argv += ["-e", f"{k}={environ[k]}"]
     if not spec.root and user is not None:
         # torch's inductor asks getpass for a user name: without USER it fails on a uid the
         # image does not know.

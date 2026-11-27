@@ -348,3 +348,72 @@ def test_still_rising_is_a_note_not_a_failure() -> None:
 def test_no_sensors_means_no_temperature(tmp_path: Path) -> None:
     assert sm.find_cpu_temp_sensors(tmp_path) == []
     assert analysis.cpu_temp(Timeseries(1.0, t=[0.0, 1.0])) == [None, None]
+
+
+def _amd_card(root: Path, rp: str, usp: str, dsp: str, gpu: str, card: str) -> None:
+    """A Radeon behind its own PCIe switch, as sysfs shows it (bus/pci/devices are symlinks)."""
+    chain = [rp, usp, dsp, gpu]
+    real = root / "sys/devices" / f"pci0000:{rp[5:7]}"
+    for addr, vendor, cls in zip(
+        chain,
+        ("0x8086", "0x1002", "0x1002", "0x1002"),
+        ("0x060400", "0x060400", "0x060400", "0x030000"),
+        strict=True,
+    ):
+        real = real / addr
+        _put(real, "vendor", vendor)
+        _put(real, "class", cls)
+        _put(real, "current_link_speed", "32.0 GT/s PCIe")
+        _put(real, "max_link_speed", "32.0 GT/s PCIe")
+        _put(real, "current_link_width", "16")
+        _put(real, "max_link_width", "16")
+        link = root / "sys/bus/pci/devices" / addr
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(real)
+    _put(real, "device", "0x7551")
+    _put(real, "mem_info_vram_total", str(32 << 30))
+    _put(real, "mem_info_vram_used", str(20 << 30))
+    _put(real, "gpu_busy_percent", "97")
+    hw = real / "hwmon/hwmon7"
+    for n, label, milli in ((1, "edge", 61000), (2, "junction", 74000), (3, "mem", 80000)):
+        _put(hw, f"temp{n}_label", label)
+        _put(hw, f"temp{n}_input", str(milli))
+    _put(hw, "power1_average", "287000000")
+    _put(hw, "freq1_input", "2350000000")
+    drm = root / "sys/class/drm" / card
+    drm.mkdir(parents=True)
+    (drm / "device").symlink_to(real)
+
+
+def test_amd_gpus_are_found_behind_their_switch_and_sampled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from hwb.metrics import amdgpu
+
+    root = tmp_path / "root"
+    _put(root, "proc/stat", "cpu  100 0 100 800 0 0 0 0\n")
+    _amd_card(root, "0000:6f:01.0", "0000:70:00.0", "0000:71:00.0", "0000:72:00.0", "card1")
+    _amd_card(root, "0000:33:01.0", "0000:34:00.0", "0000:35:00.0", "0000:36:00.0", "card2")
+    gpus = amdgpu.find(root)
+    # numbered in PCI order, whatever the card names; the slot link is the switch's upstream port
+    assert [(g.index, g.addr, g.link) for g in gpus] == [
+        ("0", "0000:36:00.0", "0000:34:00.0"),
+        ("1", "0000:72:00.0", "0000:70:00.0"),
+    ]
+    assert gpus[0].vram_gib == 32.0
+    row = amdgpu.sample(root, gpus[0])
+    assert row["temp"] == 61.0 and row["temp_junction"] == 74.0 and row["temp_mem"] == 80.0
+    assert row["power"] == 287.0 and row["util"] == 97.0 and row["sm_mhz"] == 2350.0
+
+    monkeypatch.setattr(sm.proc, "have", lambda name: False)  # no nvidia-smi on this rig
+    with sm.Sampler(tmp_path, name="t", interval=0.05, gpus=True, root=root) as s:
+        s.phase("load")
+        time.sleep(0.15)
+    ts = s.result
+    assert set(ts.values("gpu1.temp_junction")) == {74.0} and set(ts.values("gpu0.util")) == {97.0}
+    assert set(ts.values("gpu0.pcie_gen")) == {5}
+    assert ts.meta["pcie"]["0"]["addr"] == "0000:34:00.0"
+    assert analysis.pcie_findings(ts) == []
+    header = (tmp_path / "t.csv").read_text().splitlines()[0]
+    assert "gpu0_temp_junction" in header and "gpu1_power" in header
+    assert not (tmp_path / "t-gpu.csv").exists()  # no nvidia-smi output to keep

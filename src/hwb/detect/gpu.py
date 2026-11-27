@@ -23,7 +23,7 @@ from ..core.errors import HwbError
 from ..core.log import fields
 from ..core.platform import os_info
 from ..core.result import CheckResult, Status
-from ..metrics import pcie
+from ..metrics import amdgpu, pcie
 from ..metrics.pcie import LinkLimit, link_limit, normalize_bus_id
 
 log = logging.getLogger(__name__)
@@ -76,6 +76,13 @@ class GpuFacts:
     pcie_cooling: list[dict[str, Any]] = field(default_factory=list)
     # IOMMU domain type per GPU address (sysfs iommu_group/type); empty with the IOMMU off
     iommu: dict[str, str] = field(default_factory=dict)
+    # AMD GPUs (amdgpu driver) and the slot link of each (the card's PCIe switch upstream port)
+    amd: list[dict[str, Any]] = field(default_factory=list)
+    amd_links: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def amd_only(self) -> bool:
+        return not self.pci and bool(self.amd)
 
     @property
     def passthrough(self) -> list[PciGpu]:
@@ -231,6 +238,7 @@ def gather() -> GpuFacts:
             ),
         ),
     ]
+    probes.append(("amd", lambda: _gather_amd(facts, Path("/"))))
     for name, probe in probes:
         try:
             probe()
@@ -243,6 +251,23 @@ def gather() -> GpuFacts:
     except HwbError as exc:
         facts.smi_error = str(exc)
     return facts
+
+
+def _gather_amd(facts: GpuFacts, root: Path) -> None:
+    dev = root / "sys/bus/pci/devices"
+    gpus = amdgpu.find(root)
+    facts.amd = [dataclasses.asdict(g) for g in gpus]
+    facts.amd_links = [
+        {
+            "index": g.index,
+            "link": g.link,
+            "gen": pcie.link_gen(_read(dev / g.link / "current_link_speed")),
+            "width": pcie.link_width(_read(dev / g.link / "current_link_width")),
+            "max_width": pcie.link_width(_read(dev / g.link / "max_link_width")),
+            **dataclasses.asdict(link_limit(root, g.link)),
+        }
+        for g in gpus
+    ]
 
 
 # ---------------------------------------------------------------- checks
@@ -271,7 +296,32 @@ def needs_host_driver(chk: Check) -> Check:
     return wrapper
 
 
+def nvidia_only(chk: Check) -> Check:
+    """SKIP an NVIDIA driver check on a rig whose GPUs are all AMD."""
+
+    @functools.wraps(chk)
+    def wrapper(f: GpuFacts) -> CheckResult:
+        if f.amd_only:
+            return CheckResult(
+                f"gpu.{chk.__name__.removeprefix('check_')}",
+                Status.SKIP,
+                f"AMD GPUs only ({len(f.amd)}): no NVIDIA driver to check",
+            )
+        return chk(f)
+
+    return wrapper
+
+
 def check_pci(f: GpuFacts) -> CheckResult:
+    if f.amd_only:
+        vram = ", ".join(f"{g['vram_gib']:.0f} GB" for g in f.amd if g.get("vram_gib"))
+        return CheckResult(
+            "gpu.pci",
+            Status.PASS,
+            f"no NVIDIA GPU; {len(f.amd)} AMD GPU(s) on the PCI bus ({vram}): the NVIDIA driver "
+            "checks do not apply",
+            data={"amd": f.amd},
+        )
     if not f.pci:
         return CheckResult(
             "gpu.pci",
@@ -299,6 +349,7 @@ def check_nouveau(f: GpuFacts) -> CheckResult:
     return CheckResult("gpu.nouveau", Status.PASS, "nouveau not loaded")
 
 
+@nvidia_only
 @needs_host_driver
 def check_kernel_module(f: GpuFacts) -> CheckResult:
     if "nvidia" not in f.modules or f.kernel_driver is None:
@@ -317,6 +368,7 @@ def check_kernel_module(f: GpuFacts) -> CheckResult:
     )
 
 
+@nvidia_only
 def check_bound(f: GpuFacts) -> CheckResult:
     if not f.pci:
         return CheckResult("gpu.bound", Status.SKIP, "no GPUs on PCI bus")
@@ -368,6 +420,7 @@ def check_headers(f: GpuFacts) -> CheckResult:
     )
 
 
+@nvidia_only
 @needs_host_driver
 def check_nvidia_smi(f: GpuFacts) -> CheckResult:
     if f.smi_rows is None:
@@ -397,6 +450,7 @@ def check_nvidia_smi(f: GpuFacts) -> CheckResult:
     )
 
 
+@nvidia_only
 @needs_host_driver
 def check_blackwell(f: GpuFacts) -> CheckResult:
     rows = f.smi_rows or []
@@ -426,6 +480,7 @@ def _int(v: object) -> int | None:
 _BUSY_KB_S = 100_000  # PCIe traffic (rx + tx) above which the link must run at full speed
 
 
+@nvidia_only
 @needs_host_driver
 def check_pcie_link(f: GpuFacts) -> CheckResult:
     """Width below the card's (wiring, bifurcation, riser), generation capped below what card and
@@ -581,6 +636,7 @@ def check_pcie_kernel(f: GpuFacts) -> CheckResult:
     )  # fmt: skip
 
 
+@nvidia_only
 @needs_host_driver
 def check_persistence(f: GpuFacts) -> CheckResult:
     if not f.smi_rows:
@@ -596,6 +652,7 @@ def check_persistence(f: GpuFacts) -> CheckResult:
     return CheckResult("gpu.persistence", Status.PASS, "persistence mode on")
 
 
+@nvidia_only
 def check_iommu(f: GpuFacts) -> CheckResult:
     if len(f.host_gpus) < 2:
         return CheckResult("gpu.iommu", Status.SKIP, "one GPU: no peer-to-peer traffic")
@@ -614,6 +671,7 @@ def check_iommu(f: GpuFacts) -> CheckResult:
     return CheckResult("gpu.iommu", Status.PASS, f"IOMMU {mode} for the GPUs")
 
 
+@nvidia_only
 @needs_host_driver
 def check_libcuda(f: GpuFacts) -> CheckResult:
     if f.libcuda:
@@ -626,6 +684,7 @@ def check_libcuda(f: GpuFacts) -> CheckResult:
     )
 
 
+@nvidia_only
 @needs_host_driver
 def check_cuda_toolkit(f: GpuFacts) -> CheckResult:
     if f.nvcc_version is None:
@@ -644,6 +703,7 @@ def check_cuda_toolkit(f: GpuFacts) -> CheckResult:
     return CheckResult("gpu.cuda_toolkit", Status.PASS, f"CUDA toolkit {f.nvcc_version}")
 
 
+@nvidia_only
 def check_xid(f: GpuFacts) -> CheckResult:
     if f.xid_lines is None:
         return CheckResult("gpu.xid", Status.SKIP, "kernel log unreadable (run as root)")
@@ -656,6 +716,39 @@ def check_xid(f: GpuFacts) -> CheckResult:
             hint="look up the Xid codes; 79/48/63/64 usually mean hardware, power or thermal trouble",
         )
     return CheckResult("gpu.xid", Status.PASS, "no Xid events this boot")
+
+
+def check_amd_pcie(f: GpuFacts) -> CheckResult:
+    """Each AMD card's slot link (its PCIe switch's upstream port): width below the maximum, a
+    slot older than the card, a generation capped below both, errors since boot. The current
+    generation at idle is not judged (serve and the benchmarks watch it under load)."""
+    if not f.amd:
+        return CheckResult("gpu.amd_pcie", Status.SKIP, "no AMD GPUs")
+    problems: list[str] = []
+    links: list[str] = []
+    for lk in f.amd_links:
+        gpu = f"GPU{lk['index']}"
+        lim = LinkLimit(lk["addr"], lk["gpu_gen"], lk["port_gen"], lk["target_gen"], lk["errors"])
+        links.append(f"{gpu} Gen{lim.slot_gen or '?'} x{lk['width'] or '?'}")
+        if lk["width"] and lk["max_width"] and lk["width"] < lk["max_width"]:
+            problems.append(f"{gpu} link x{lk['width']} of x{lk['max_width']}")
+        if lim.target_capped:
+            why = "set in the BIOS" if lim.bios_capped else "a fallback after errors"
+            problems.append(
+                f"{gpu} port trains to Gen{lim.target_gen} of Gen{lim.slot_gen} ({why})"
+            )
+        if lim.errors:
+            problems.append(f"{gpu} {lim.errors} correctable PCIe errors since boot")
+    if problems:
+        return CheckResult(
+            "gpu.amd_pcie", Status.WARN, "; ".join(problems), data={"links": f.amd_links},
+            hint="a narrow or erroring link is usually the riser, the slot or the seating; a "
+            "BIOS-set generation is fixed in the slot's PCIe settings",
+        )  # fmt: skip
+    return CheckResult(
+        "gpu.amd_pcie", Status.PASS, f"slot links at full width: {', '.join(links)}",
+        data={"links": f.amd_links},
+    )  # fmt: skip
 
 
 CHECKS: tuple[Check, ...] = (
@@ -674,6 +767,7 @@ CHECKS: tuple[Check, ...] = (
     check_libcuda,
     check_cuda_toolkit,
     check_xid,
+    check_amd_pcie,
 )
 
 

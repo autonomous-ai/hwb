@@ -304,3 +304,26 @@ def test_iommu_translating_gpu_dma_is_flagged(tmp_path: Path) -> None:
     )
     assert check_iommu(GpuFacts(pci=pci)).status == Status.PASS  # IOMMU off
     assert check_iommu(GpuFacts(pci=pci[:1])).status == Status.SKIP
+
+
+def test_an_amd_only_rig_skips_the_nvidia_checks() -> None:
+    from hwb.detect import gpu as g
+
+    link = {"index": "0", "link": "0000:34:00.0", "gen": 5, "width": 16, "max_width": 16,
+            "addr": "0000:34:00.0", "gpu_gen": 5, "port_gen": 5, "target_gen": 5, "errors": 0}  # fmt: skip
+    f = g.GpuFacts(
+        smi_error="NVIDIA-SMI has failed",
+        amd=[{"index": "0", "addr": "0000:36:00.0", "vram_gib": 31.9}],
+        amd_links=[link],
+    )
+    assert g.check_pci(f).status == Status.PASS and "1 AMD GPU" in g.check_pci(f).summary
+    for chk in (g.check_kernel_module, g.check_nvidia_smi, g.check_pcie_link, g.check_iommu):
+        assert chk(f).status == Status.SKIP
+    ok = g.check_amd_pcie(f)
+    assert ok.status == Status.PASS and "GPU0 Gen5 x16" in ok.summary
+    narrow = g.GpuFacts(amd=f.amd, amd_links=[{**link, "width": 8, "errors": 3}])
+    bad = g.check_amd_pcie(narrow)
+    assert (
+        bad.status == Status.WARN and "x8 of x16" in bad.summary and "3 correctable" in bad.summary
+    )
+    assert g.check_amd_pcie(g.GpuFacts()).status == Status.SKIP

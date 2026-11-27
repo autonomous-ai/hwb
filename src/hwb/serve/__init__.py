@@ -81,6 +81,7 @@ class ServeOptions:
     profiles: tuple[suite.Profile, ...] = ()  # extra input/output-length tests after the sweep
     docker: bool = False  # run the preset in a container (its template, else DEFAULT_IMAGE)
     image: str | None = None  # this image instead (implies docker)
+    gpus: tuple[str, ...] = ()  # launch on these GPU indices (PCI bus order)
 
 
 def hwb_home() -> Path:
@@ -611,6 +612,25 @@ def run(ctx: RunContext, opts: ServeOptions) -> None:
                 ",".join(free[:needed]),
             )
 
+    if opts.gpus:  # the operator picked the cards (one card at a time, a slot under test)
+        unknown = [g for g in opts.gpus if not g.isdigit() or int(g) >= len(gpus)]
+        if unknown and not opts.force:
+            ctx.add(CheckResult(
+                "serve.vllm", Status.SKIP, f"--gpus {','.join(opts.gpus)}: no GPU {','.join(unknown)} "
+                f"on this machine ({len(gpus)} found)", hint="GPUs are numbered from 0 in PCI bus order",
+            ))  # fmt: skip
+            return
+        taken = [g for g in opts.gpus if g in busy]
+        if taken and not opts.force:
+            ctx.add(CheckResult(
+                "serve.vllm", Status.SKIP, f"--gpus {','.join(opts.gpus)}: GPU {','.join(taken)} "
+                f"already in use ({workloads.summarize(running)})",
+                hint=f"free GPUs: {','.join(free) or 'none'}; --force launches anyway",
+            ))  # fmt: skip
+            return
+        env |= {"CUDA_DEVICE_ORDER": "PCI_BUS_ID", "CUDA_VISIBLE_DEVICES": ",".join(opts.gpus)}
+        section["gpus"] = list(opts.gpus)
+
     vendor = want_hw.vendor if want_hw else (hw.vendor if hw else "nvidia")
     spec = preset.container
     if opts.image:
@@ -628,7 +648,7 @@ def run(ctx: RunContext, opts: ServeOptions) -> None:
 
     if spec and spec.own_command:  # the image fetches and keeps its own weights
         model_arg: str | None = None
-        cache = container_cache(preset)
+        cache = container_cache(preset, spec)
         plan: dict[str, Any] = {"cached": False, "source": "image",
                                 "note": f"the image fetches its own weights into {cache}"}  # fmt: skip
     else:
@@ -716,8 +736,11 @@ def run(ctx: RunContext, opts: ServeOptions) -> None:
             proc.run(container.remove_command(name), timeout=120)
 
 
-def container_cache(preset: presets.Preset) -> Path:
-    return hwb_home() / "docker" / preset.name
+def container_cache(preset: presets.Preset, spec: presets.Container) -> Path:
+    """The template's own cache, one per image repository and model: the variants of one image
+    (tags) share the weights they download."""
+    repo = spec.image.split("@")[0].rsplit(":", 1)[0].rsplit("/", 1)[-1]
+    return hwb_home() / "docker" / f"{repo}--{preset.model.replace('/', '--')}"
 
 
 def _docker_argv(
@@ -736,7 +759,7 @@ def _docker_argv(
     readonly = bool(hub_env) and not os.access(hub, os.W_OK)
     mounts = container.Mounts(
         hub=hub, hub_readonly=readonly, home=hwb_home() / "docker" / "home",
-        cache=container_cache(preset),
+        cache=container_cache(preset, spec),
     )  # fmt: skip
     if not opts.dry_run:
         # docker would create missing mount sources as root

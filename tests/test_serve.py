@@ -187,6 +187,10 @@ def test_hardware_matching() -> None:
         "inkling-2-mini-r9700-w3",
     }
     assert presets.matching_hardware([rx9070]) is None  # same chip, 16 GB
+    rtx5090 = presets.Gpu("NVIDIA GeForce RTX 5090", 31.8, "12.0")
+    eight = presets.matching_hardware([rtx5090] * 8)
+    assert eight is not None and eight.id == "1x-rtx-5090"
+    assert [p.name for p in presets.for_hardware(eight)] == ["inkling-2-mini-5090"]
 
 
 def test_choose_preset_without_a_default() -> None:
@@ -284,6 +288,33 @@ def test_serve_dry_run_prints_docker_command(
     assert "docker command:" in out and "docker run --rm" in out
     assert '\'{"method":"dspark"' in out  # quoted so it pastes
     assert not (tmp_path / "home" / "docker").exists()  # a dry run creates nothing
+
+
+def test_container_cache_is_shared_by_image_tags() -> None:
+    a, b = presets.by_name("inkling-2-mini-r9700"), presets.by_name("inkling-2-mini-r9700-w3")
+    assert a and b and a.container and b.container
+    ca, cb = serve.container_cache(a, a.container), serve.container_cache(b, b.container)
+    assert ca == cb and ca.name == "paiton-vllm-plugin--thinkingmachines--Inkling-2-Mini"
+
+
+def test_gpus_option_picks_the_cards(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("HWB_HOME", str(tmp_path / "home"))
+    r9700 = presets.Gpu("AMD gfx1201 (device 0x7551)", 31.9, "gfx1201")
+    monkeypatch.setattr(serve, "detected_gpus", lambda: [r9700, r9700])
+    base = ["serve", "--preset", "inkling-2-mini-r9700", "--dry-run"]
+    assert cli.main(["--out", str(tmp_path / "a"), *base, "--gpus", "1"]) == 0
+    assert "HIP_VISIBLE_DEVICES=1" in capsys.readouterr().out
+    cli.main(["--out", str(tmp_path / "b"), *base, "--gpus", "2"])
+    assert "no GPU 2" in "".join(capsys.readouterr())
+    # a card another workload holds is refused: pick a free one
+    monkeypatch.setattr(serve.workloads, "busy_gpus", lambda running: {"0": 9800.0})
+    cli.main(["--out", str(tmp_path / "c"), *base, "--gpus", "0"])
+    out = "".join(capsys.readouterr())
+    assert "GPU 0 already in use" in out
+    assert cli.main(["--out", str(tmp_path / "d"), *base, "--gpus", "1"]) == 0
+    assert "HIP_VISIBLE_DEVICES=1" in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------- client and suite
@@ -522,6 +553,22 @@ def test_reasoning_that_eats_the_answer_budget_is_explained(
     monkeypatch.setattr(suite, "chat", lambda *a, **k: thinking_only)
     (first, *_) = suite.run_checks("http://x", "m", no_thinking=suite.NO_THINKING_ANY, tools=False)
     assert first["status"] == "fail" and "budget went to reasoning" in first["detail"]
+    assert first["max_tokens"] == 32 + suite.REASONING_BUDGET
+
+
+def test_a_check_retries_with_room_to_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    budgets: list[int] = []
+
+    def chat(*a: object, max_tokens: int, **k: object) -> client.Reply:
+        budgets.append(max_tokens)
+        if max_tokens <= 32:
+            return client.Reply(ok=True, reasoning="17 times 23 is", completion_tokens=32)
+        return client.Reply(ok=True, reasoning="17*23", text="391", completion_tokens=200)
+
+    monkeypatch.setattr(suite, "chat", chat)
+    (first, *_) = suite.run_checks("http://x", "m", no_thinking={}, tools=False)
+    assert budgets[:2] == [32, 32 + suite.REASONING_BUDGET]
+    assert first["status"] == "pass" and "after reasoning" in first["detail"]
 
 
 def test_failure_causes_skip_the_wrapping_tracebacks() -> None:

@@ -145,6 +145,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument(
         "--image", metavar="IMAGE", help="run the server in this docker image (implies --docker)"
     )
+    s.add_argument(
+        "--gpus",
+        metavar="LIST",
+        help="launch on these GPUs only, comma-separated indices in PCI bus order (e.g. 1 to test one card)",
+    )
     s.add_argument("--dry-run", action="store_true", help="print the vllm command and stop")
     s.add_argument("--force", action="store_true", help="run a preset meant for other hardware")
 
@@ -261,6 +266,7 @@ def _serve_options(args: argparse.Namespace) -> serve.ServeOptions:
         profiles=serve.suite.parse_profiles(args.profiles),
         docker=args.docker or bool(args.image),
         image=args.image,
+        gpus=tuple(g.strip() for g in (args.gpus or "").split(",") if g.strip()),
     )
 
 

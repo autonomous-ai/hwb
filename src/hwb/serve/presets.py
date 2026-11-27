@@ -133,6 +133,14 @@ HARDWARE = {
             compute_cap="12.0",
         ),
         Hardware(
+            "1x-rtx-5090",
+            "1x NVIDIA GeForce RTX 5090 (32 GB, sm_120)",
+            r"RTX 5090",
+            gpus=1,
+            min_mem_gib=30,
+            compute_cap="12.0",
+        ),
+        Hardware(
             "1x-radeon-ai-pro-r9700",
             "1x AMD Radeon AI PRO R9700 (32 GB, RDNA4 gfx1201)",
             r"gfx1201",
@@ -455,6 +463,29 @@ PRESETS: tuple[Preset, ...] = (
         args=(
             "--max-model-len", "262144",
             "--gpu-memory-utilization", "0.85",
+            "--reasoning-parser", "inkling",
+            "--tool-call-parser", "inkling",
+            "--enable-auto-tool-choice",
+            "--speculative-config", _DSPARK7,
+        ),
+    ),
+    Preset(
+        name="inkling-2-mini-5090",
+        family="inkling",
+        hardware="1x-rtx-5090",
+        model=INKLING,
+        revision=INKLING_REVISION,
+        weights_gb=20.0,
+        quant="nvfp4 + mxfp8 (as released)",
+        context=65536,
+        container=Container(INKLING_IMAGE),
+        notes="The RTX PRO 6000 recipe on a 32 GB card, the peer of the Radeon AI PRO R9700: ~20 GB "
+              "of weights leave room for 64K of context (262K would need ~13 GiB of KV cache) next "
+              "to the DSpark drafter. Reasoning cannot be switched off fully (model card).",
+        sources=("https://huggingface.co/blog/inkling-2-mini-inference-hillclimb",),
+        args=(
+            "--max-model-len", "65536",
+            "--gpu-memory-utilization", "0.92",
             "--reasoning-parser", "inkling",
             "--tool-call-parser", "inkling",
             "--enable-auto-tool-choice",

@@ -657,3 +657,30 @@ def test_instanttensor_is_dropped_where_it_cannot_load() -> None:
     assert serve.loader_problem(8 << 20, {}) is not None  # Ubuntu's default 8 MiB
     held = serve.loader_problem(None, {"0": 985.0, "1": 16.0})
     assert held is not None and "GPU0 985 MiB" in held
+
+
+def test_amd_container_sees_only_its_own_card(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    for card, addr, render in (("card1", "0000:36:00.0", "renderD128"), ("card2", "0000:72:00.0", "renderD129")):  # fmt: skip
+        dev = root / "sys/devices/pci0000:00" / addr
+        (dev / "drm" / card).mkdir(parents=True)
+        (dev / "drm" / render).mkdir()
+        (dev / "vendor").write_text("0x1002")
+        (dev / "mem_info_vram_total").write_text(str(32 << 30))
+        link = root / "sys/bus/pci/devices" / addr
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(dev)
+        drm = root / "sys/class/drm" / card
+        drm.mkdir(parents=True)
+        (drm / "device").symlink_to(dev)
+    assert container.amd_device_nodes(["1"], root) == ["/dev/dri/card2", "/dev/dri/renderD129"]
+    assert container.amd_device_nodes(["5"], root) is None
+    p = presets.by_name("inkling-2-mini-r9700")
+    assert p is not None and p.container is not None
+    argv = container.docker_command(
+        p, p.container, name="n", port=8001, vendor="amd", mounts=_mounts(tmp_path), gpus=["1"],
+        environ={}, amd_nodes=container.amd_device_nodes(["1"], root),
+    )  # fmt: skip
+    devices = [argv[i + 1] for i, a in enumerate(argv) if a == "--device"]
+    assert devices == ["/dev/kfd", "/dev/dri/card2", "/dev/dri/renderD129"]
+    assert not any(a.startswith("HIP_VISIBLE_DEVICES") for a in argv)  # it is GPU 0 inside

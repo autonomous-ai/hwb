@@ -772,6 +772,7 @@ def _docker_argv(
         preset, spec, name=name, port=opts.port, vendor=vendor, mounts=mounts, gpus=gpus,
         model_arg=model_arg, env=env, user=container.invoking_user(),
         gids=container.device_gids() if vendor == "amd" else None,
+        amd_nodes=container.amd_device_nodes(gpus) if vendor == "amd" and gpus else None,
     )  # fmt: skip
 
 

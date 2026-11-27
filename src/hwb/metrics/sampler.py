@@ -3,7 +3,8 @@
 Host metrics are read from procfs/sysfs on a thread every ``interval`` seconds: CPU
 utilization, clocks, package temperatures, package power (RAPL), memory, load and the
 kernel's thermal-throttle counters, fan tachometers (hwmon) and per-fan GPU duty/RPM (NVML,
-see ``fans.py``). The other GPU metrics come from one ``nvidia-smi -lms`` child.
+see ``fans.py``). The other NVIDIA GPU metrics come from one ``nvidia-smi -lms`` child; AMD GPUs
+are read from sysfs on the same thread (``amdgpu.py``).
 Full resolution goes to CSV files in the run directory; ``timeseries()`` returns a
 compact, downsampled copy for the report and the viewer's charts.
 
@@ -30,6 +31,7 @@ from typing import Any
 from ..core import proc
 from ..core.errors import HwbError
 from ..core.log import fields
+from . import amdgpu
 from .fans import NvmlFans, find_hwmon_fans, read_rpm
 from .pcie import PcieWatch, gpu_addresses
 
@@ -68,6 +70,16 @@ OPTIONAL_GPU_FIELDS = (
 GPU_POWER_CAP = 0x4
 GPU_SLOWDOWN = 0x8 | 0x20 | 0x40 | 0x80  # HW slowdown, SW thermal, HW thermal, HW power brake
 _GPU_TS = "%Y/%m/%d %H:%M:%S.%f"
+# AMD sample key -> series label and group; the keys match the NVIDIA series where they mean the
+# same (temp = edge, as nvidia-smi's temperature.gpu; sm_mhz = the shader clock).
+AMD_SERIES = (
+    ("temp", "temperature (edge)", "temperature"),
+    ("temp_junction", "junction temperature", "temperature"),
+    ("temp_mem", "memory temperature", "temperature"),
+    ("util", "utilization", "utilization"),
+    ("power", "power", "power"),
+    ("sm_mhz", "shader clock", "clock"),
+)
 
 # group -> (unit, how to merge samples when downsampling)
 GROUPS: dict[str, tuple[str, Callable[[list[float]], float]]] = {
@@ -268,6 +280,10 @@ def parse_gpu_csv(
     return rows
 
 
+def _round(v: float | None) -> float | None:
+    return v if v is None else round(v, 2)
+
+
 def _fan(row: dict[str, Any], gpu: str, n: int, col: int) -> float | None:
     """Duty % (col 0) or RPM (col 1) of one GPU fan in one sample."""
     fans = row["gpu_fans"].get(gpu) or []
@@ -363,6 +379,7 @@ class Sampler:
         self._pcie: PcieWatch | None = None
         self._gpu_fields: tuple[str, ...] = GPU_FIELDS
         self._nvml: NvmlFans | None = None
+        self._amd: list[amdgpu.AmdGpu] = []
 
     # -- phases
     def now(self) -> float:
@@ -391,12 +408,22 @@ class Sampler:
         self.result.meta["cpu_temp_sensors"] = [s.label for s in self._sensors]
         self._fans = find_hwmon_fans(self.root)
         self._gpu_csv = self.out_dir / f"{self.name}-gpu.csv"
+        nvidia: dict[str, str] = {}
         if self.gpus and proc.have("nvidia-smi"):
             try:
-                self._pcie = PcieWatch(self.root, gpu_addresses())
+                nvidia = gpu_addresses()
+            except (HwbError, OSError) as exc:  # nvidia-smi left over on a rig without the driver
+                log.debug("nvidia-smi lists no GPUs: %s", exc)
+        if self.gpus and not nvidia:
+            self._amd = amdgpu.find(self.root)
+        links = nvidia or {g.index: g.link for g in self._amd}
+        if links:
+            try:
+                self._pcie = PcieWatch(self.root, links)
                 self._pcie.start()
             except (HwbError, OSError) as exc:
                 log.warning("PCIe link monitoring unavailable: %s", exc)
+        if nvidia:
             self._nvml = NvmlFans.open()
             if self._nvml:
                 self._exit.callback(self._nvml.close)
@@ -449,6 +476,7 @@ class Sampler:
             "pcie": self._pcie.sample() if self._pcie else {},
             "fans": {f.label: read_rpm(f) for f in self._fans},
             "gpu_fans": self._nvml.sample() if self._nvml else {},
+            "amd": {g.index: amdgpu.sample(root, g) for g in self._amd},
         }
         state.update(cpu=cpu, energy=energy, time=now)
         return row
@@ -510,6 +538,14 @@ class Sampler:
                     f"GPU{g} fan {n}{label}",
                     group,
                     (_fan(r, g, n, col) for r in self._rows),
+                )
+        for g in self._amd:
+            for metric, label, group in AMD_SERIES:
+                put(
+                    f"gpu{g.index}.{metric}",
+                    f"GPU{g.index} {label}",
+                    group,
+                    (r["amd"].get(g.index, {}).get(metric) for r in self._rows),
                 )
         throttles = [r["throttle"] for r in self._rows if r["throttle"] is not None]
         ts.meta["cpu_throttle_events"] = (
@@ -586,6 +622,7 @@ class Sampler:
         cols += [f"temp_c[{s.label}]" for s in self._sensors]
         cols += [f"fan_rpm[{f.label}]" for f in self._live_fans]
         cols += [f"gpu{g}_fan{n}_{k}" for g, n in self._gpu_fans for k in ("pct", "rpm")]
+        cols += [f"gpu{g.index}_{k}" for g in self._amd for k, _, _ in AMD_SERIES]
         pcie = self._pcie.gpus if self._pcie else []
         for g in pcie:
             cols += [
@@ -609,6 +646,11 @@ class Sampler:
                     + [r["temps"].get(s.label) for s in self._sensors]
                     + [r["fans"].get(f.label) for f in self._live_fans]
                     + [_fan(r, g, n, c) for g, n in self._gpu_fans for c in (0, 1)]
+                    + [
+                        _round(r["amd"].get(g.index, {}).get(k))
+                        for g in self._amd
+                        for k, _, _ in AMD_SERIES
+                    ]
                     + [
                         r["pcie"].get(g.index, {}).get(k)
                         for g in pcie

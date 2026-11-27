@@ -1,3 +1,3 @@
 """hwb — acceptance testing for fresh NVIDIA GPU servers."""
 
-__version__ = "0.14.2"
+__version__ = "0.14.3"

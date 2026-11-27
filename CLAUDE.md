@@ -40,6 +40,7 @@ gateway/               Cloudflare Worker (JS): R2 report store, D1 analysis tabl
                        client.py (stdlib streaming OpenAI client with timings), __init__.py (launch/endpoint, teardown)
                        weights.py (weights on disk: HF caches incl. other users', ModelScope, dirs, Ollama/LM Studio;
                        completeness; downloads only into the shared HF cache, never a private store)
+  metrics/amdgpu.py    AMD GPUs from sysfs (amdgpu): inventory, slot link (card's PCIe switch), temps/power/busy samples
   metrics/workloads.py what already runs on the GPUs (process -> server walk; never stores command lines)
 ```
 
@@ -93,4 +94,5 @@ Output goes to `hwb-runs/<UTC-timestamp>-<host>-<command>/{report.json,report.md
 - [ ] `bench gpu`: torch payload in a uv venv: GEMM TFLOPS per dtype, memory bandwidth, H2D/D2H, P2P, NCCL all-reduce
 - [x] `serve`: presets per hardware, uv venv with vllm (`--install-vllm`), health wait, answer checks + load sweep, guaranteed teardown; `--endpoint` for running servers. Mark presets verified after a real run
 - [x] `serve` in docker: per-preset container templates (model-specific vLLM images, ROCm forks), `--docker`/`--image`; AMD GPUs detected from KFD sysfs and served only in containers. hwb never adds sudo for docker
+- [x] AMD rigs: `metrics/amdgpu.py` samples edge/junction/memory temperature, power, busy % and shader clock from sysfs; the PCIe link judged is the card's switch upstream port (the slot); `info` skips the NVIDIA driver checks and runs `gpu.amd_pcie`
 - [ ] offline bundle: `.pyz` + uv binary + wheelhouse for air-gapped rigs
